@@ -141,7 +141,7 @@ exports.handler = async (event, context) => {
         const host = (event.headers && (event.headers['x-forwarded-host'] || event.headers.host)) || 'localhost';
         const proto = (event.headers && (event.headers['x-forwarded-proto'] || event.headers['x-forwarded-protocol'])) || 'https';
         let rel = urlParam;
-        if (rel.startsWith('/api/')) rel = '/.netlify/functions/api' + rel;
+        if (rel.startsWith('/api/')) rel = '/.netlify/functions/api' + rel.substring(4);
         u = new URL(`${proto}://${host}${rel}`);
       } else {
         u = new URL(urlParam);
