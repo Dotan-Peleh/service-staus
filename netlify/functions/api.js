@@ -3,12 +3,12 @@
 const http = require('http');
 const https = require('https');
 
-function sendJson(cb, status, obj) {
-  cb(null, {
+function json(status, obj) {
+  return {
     statusCode: status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' },
     body: JSON.stringify(obj),
-  });
+  };
 }
 
 function fetchText(url) {
@@ -22,7 +22,7 @@ function fetchText(url) {
   });
 }
 
-exports.handler = async (event, context, cb) => {
+exports.handler = async (event, context) => {
   try {
     const path = event.path.replace(/^\/.netlify\/functions\//, '/');
     if (path === '/api/apple/status') {
@@ -34,7 +34,7 @@ exports.handler = async (event, context, cb) => {
         const start = body.indexOf('{'); const end = body.lastIndexOf('}');
         if (start >= 0 && end > start) data = JSON.parse(body.slice(start, end + 1));
       }
-      if (!data || !Array.isArray(data.services)) return sendJson(cb, 502, { state: 'unknown' });
+      if (!data || !Array.isArray(data.services)) return json(502, { state: 'unknown' });
       const target = new Set(['app store','app store connect']);
       let hasIncident = false; let detail = '';
       for (const svc of data.services) {
@@ -44,7 +44,7 @@ exports.handler = async (event, context, cb) => {
         const active = events.find(e => !e.endDate || (e.eventStatus && String(e.eventStatus).toLowerCase() !== 'resolved'));
         if (active) { hasIncident = true; detail = active.message || active.userFacingStatus || active.eventStatus || ''; break; }
       }
-      return sendJson(cb, 200, hasIncident ? { state: 'incident', severity: 'minor', title: 'Apple App Store incident', detail } : { state: 'operational' });
+      return json(200, hasIncident ? { state: 'incident', severity: 'minor', title: 'Apple App Store incident', detail } : { state: 'operational' });
     }
 
     if (path === '/api/google/play-status') {
@@ -57,10 +57,10 @@ exports.handler = async (event, context, cb) => {
       const hasInvestigating = /(investigating|identified|monitoring|ongoing|in progress|mitigating)/i.test(plain);
       const allOk = /all systems operational|no incidents reported|no known issues/i.test(plain) || /operational\s*$/.test(text);
       const snippet = (()=>{ const s=plain.split(/(?<=[.!?])\s+/); const i=s.findIndex(t=>/outage|incident|degrad|disruption|unavail|maintenance|resolved|restored/i.test(t)); return i>=0?s[i].trim().slice(0,240):''; })();
-      if (allOk) return sendJson(cb, 200, { state: 'operational' });
-      if ((hasMajor||hasMinor) && hasInvestigating) return sendJson(cb, 200, { state: 'incident', severity: hasMajor?'critical':'minor', title: snippet || 'Detected incident' });
-      if (hasMajor||hasMinor) return sendJson(cb, 200, { state: 'operational', lastIncident: { title: snippet, endedAt: null } });
-      return sendJson(cb, 200, { state: 'operational' });
+      if (allOk) return json(200, { state: 'operational' });
+      if ((hasMajor||hasMinor) && hasInvestigating) return json(200, { state: 'incident', severity: hasMajor?'critical':'minor', title: snippet || 'Detected incident' });
+      if (hasMajor||hasMinor) return json(200, { state: 'operational', lastIncident: { title: snippet, endedAt: null } });
+      return json(200, { state: 'operational' });
     }
 
     if (path === '/api/google/cloud-status') {
@@ -74,10 +74,10 @@ exports.handler = async (event, context, cb) => {
       const hasInvestigating = /(investigating|identified|monitoring|ongoing|in progress|mitigating|current incident)/i.test(sanitized);
       const allOk = /all services available|no incidents reported|no known issues|all systems operational/i.test(sanitized) || /operational\s*$/.test(text);
       const snippet = (()=>{ const s=sanitized.split(/(?<=[.!?])\s+/); const i=s.findIndex(t=>/outage|incident|degrad|disruption|unavail|maintenance|resolved|restored/i.test(t)); return i>=0?s[i].trim().slice(0,240):''; })();
-      if (allOk) return sendJson(cb, 200, { state: 'operational' });
-      if ((hasMajor||hasMinor) && hasInvestigating) return sendJson(cb, 200, { state: 'incident', severity: hasMajor?'critical':'minor', title: snippet || 'Detected incident' });
-      if (hasMajor||hasMinor) return sendJson(cb, 200, { state: 'operational', lastIncident: { title: snippet, endedAt: null } });
-      return sendJson(cb, 200, { state: 'operational' });
+      if (allOk) return json(200, { state: 'operational' });
+      if ((hasMajor||hasMinor) && hasInvestigating) return json(200, { state: 'incident', severity: hasMajor?'critical':'minor', title: snippet || 'Detected incident' });
+      if (hasMajor||hasMinor) return json(200, { state: 'operational', lastIncident: { title: snippet, endedAt: null } });
+      return json(200, { state: 'operational' });
     }
 
     if (path === '/api/facebook/status') {
@@ -88,10 +88,10 @@ exports.handler = async (event, context, cb) => {
       const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
       const hasMinor = /(partial outage|degraded performance|degradation|disruption)/i.test(plain);
       const snippet = (()=>{ const s=plain.split(/(?<=[.!?])\s+/); const i=s.findIndex(t=>/outage|incident|degrad|disruption|unavail|resolved|restored|closed/i.test(t)); return i>=0?s[i].trim().slice(0,240):''; })();
-      if (allOk) return sendJson(cb, 200, { state: 'operational' });
-      if (hasInvestigating && (hasCritical || hasMinor)) return sendJson(cb, 200, { state: 'incident', severity: hasCritical?'critical':'minor', title: snippet || 'Detected incident' });
-      if (hasCritical || hasMinor) return sendJson(cb, 200, { state: 'operational', lastIncident: { title: snippet, endedAt: null } });
-      return sendJson(cb, 200, { state: 'operational' });
+      if (allOk) return json(200, { state: 'operational' });
+      if (hasInvestigating && (hasCritical || hasMinor)) return json(200, { state: 'incident', severity: hasCritical?'critical':'minor', title: snippet || 'Detected incident' });
+      if (hasCritical || hasMinor) return json(200, { state: 'operational', lastIncident: { title: snippet, endedAt: null } });
+      return json(200, { state: 'operational' });
     }
 
     if (path === '/api/firebase/status') {
@@ -123,14 +123,14 @@ exports.handler = async (event, context, cb) => {
           active.push({ title, severity });
         }
       }
-      return sendJson(cb, 200, active.length ? { state: 'incident', severity: active[0].severity, title: active[0].title } : { state: 'operational' });
+      return json(200, active.length ? { state: 'incident', severity: active[0].severity, title: active[0].title } : { state: 'operational' });
     }
 
     // Proxy statuspage-like endpoints
     if (path.startsWith('/api/fetch')) {
       const target = new URL(event.rawQuery || '', 'http://localhost');
       const urlParam = target.searchParams.get('url');
-      if (!urlParam) return sendJson(cb, 400, { error: 'Missing url' });
+      if (!urlParam) return json(400, { error: 'Missing url' });
       const u = new URL(urlParam);
       const lib = u.protocol === 'http:' ? http : https;
       const resp = await new Promise((resolve) => {
@@ -139,14 +139,14 @@ exports.handler = async (event, context, cb) => {
         });
         req.on('error', () => resolve({ statusCode: 502, headers: {}, body: 'Proxy error' }));
       });
-      return cb(null, { statusCode: resp.statusCode, headers: { 'Content-Type': resp.headers['content-type'] || 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: resp.body });
+      return { statusCode: resp.statusCode, headers: { 'Content-Type': resp.headers['content-type'] || 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: resp.body };
     }
 
     // HTML heuristic checker for non-API status pages
     if (path.startsWith('/api/check-html')) {
       const target = new URL(event.rawQuery || '', 'http://localhost');
       const urlParam = target.searchParams.get('url');
-      if (!urlParam) return sendJson(cb, 400, { error: 'Missing url' });
+      if (!urlParam) return json(400, { error: 'Missing url' });
       const u = urlParam;
       try {
         const body = await fetchText(u);
@@ -160,15 +160,15 @@ exports.handler = async (event, context, cb) => {
         else if (hasMinor) result = { state: 'incident', severity: 'minor', title: 'Detected degraded service from status page', eta: null };
         else if (hasAllOperational || /operational/.test(text)) result = { state: 'operational' };
         else result = { state: 'unknown' };
-        return sendJson(cb, 200, result);
+        return json(200, result);
       } catch {
-        return sendJson(cb, 502, { state: 'unknown' });
+        return json(502, { state: 'unknown' });
       }
     }
 
-    return sendJson(cb, 404, { error: 'Not found' });
+    return json(404, { error: 'Not found' });
   } catch (e) {
-    return sendJson(cb, 500, { error: 'Server error' });
+    return json(500, { error: 'Server error' });
   }
 };
 
