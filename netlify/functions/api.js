@@ -80,6 +80,51 @@ exports.handler = async (event, context) => {
       return json(200, { state: 'operational' });
     }
 
+    if (path === '/api/mixpanel/status') {
+      // Normalize Mixpanel Statuspage
+      try {
+        // Try summary.json first
+        const getJson = (u) => new Promise((resolve, reject) => {
+          const lib = u.startsWith('http:') ? http : https;
+          lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
+            const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
+          }).on('error', reject);
+        });
+
+        try {
+          const summary = await getJson('https://status.mixpanel.com/api/v2/summary.json');
+          if (summary && Array.isArray(summary.incidents) && summary.incidents.length > 0) {
+            const active = summary.incidents.find(i => i.status !== 'resolved');
+            if (active) {
+              const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
+              const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+              return json(200, { state: 'incident', severity, title: active.name || 'Service Incident' });
+            }
+          }
+        } catch (_) {}
+
+        // Fallback to status.json (indicator)
+        try {
+          const status = await getJson('https://status.mixpanel.com/api/v2/status.json');
+          const indicator = status && status.status && String(status.status.indicator || '').toLowerCase();
+          if (indicator === 'none') return json(200, { state: 'operational' });
+          if (indicator === 'minor') return json(200, { state: 'incident', severity: 'minor', title: status.status.description || 'Service Incident' });
+          if (indicator === 'major' || indicator === 'critical') return json(200, { state: 'incident', severity: 'critical', title: status.status.description || 'Service Incident' });
+        } catch (_) {}
+
+        // Last resort: HTML
+        const html = await fetchText('https://status.mixpanel.com/');
+        const plain = html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+        const hasMajor = /(major outage|critical|service (outage|down))/i.test(plain);
+        const hasMinor = /(partial outage|degraded|degradation|incident|maintenance)/i.test(plain);
+        if (hasMajor) return json(200, { state: 'incident', severity: 'critical', title: 'Detected incident' });
+        if (hasMinor) return json(200, { state: 'incident', severity: 'minor', title: 'Detected incident' });
+        return json(200, { state: 'operational' });
+      } catch {
+        return json(200, { state: 'unknown' });
+      }
+    }
+
     if (path === '/api/facebook/status') {
       const body = await fetchText('https://metastatus.com/');
       const plain = body.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
