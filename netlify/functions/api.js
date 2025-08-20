@@ -128,10 +128,24 @@ exports.handler = async (event, context) => {
 
     // Proxy statuspage-like endpoints
     if (path.startsWith('/api/fetch')) {
-      const target = new URL(event.rawQuery || '', 'http://localhost');
-      const urlParam = target.searchParams.get('url');
+      const params = event.queryStringParameters || {};
+      let urlParam = params.url;
+      if (!urlParam && event.rawQuery) {
+        const m = event.rawQuery.match(/(?:^|&)url=([^&]+)/);
+        if (m) urlParam = decodeURIComponent(m[1]);
+      }
       if (!urlParam) return json(400, { error: 'Missing url' });
-      const u = new URL(urlParam);
+
+      let u;
+      if (urlParam.startsWith('/')) {
+        const host = (event.headers && (event.headers['x-forwarded-host'] || event.headers.host)) || 'localhost';
+        const proto = (event.headers && (event.headers['x-forwarded-proto'] || event.headers['x-forwarded-protocol'])) || 'https';
+        let rel = urlParam;
+        if (rel.startsWith('/api/')) rel = '/.netlify/functions/api' + rel;
+        u = new URL(`${proto}://${host}${rel}`);
+      } else {
+        u = new URL(urlParam);
+      }
       const lib = u.protocol === 'http:' ? http : https;
       const resp = await new Promise((resolve) => {
         const req = lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json,text/plain,*/*' } }, (r) => {
@@ -144,8 +158,12 @@ exports.handler = async (event, context) => {
 
     // HTML heuristic checker for non-API status pages
     if (path.startsWith('/api/check-html')) {
-      const target = new URL(event.rawQuery || '', 'http://localhost');
-      const urlParam = target.searchParams.get('url');
+      const params = event.queryStringParameters || {};
+      let urlParam = params.url;
+      if (!urlParam && event.rawQuery) {
+        const m = event.rawQuery.match(/(?:^|&)url=([^&]+)/);
+        if (m) urlParam = decodeURIComponent(m[1]);
+      }
       if (!urlParam) return json(400, { error: 'Missing url' });
       const u = urlParam;
       try {
