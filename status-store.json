@@ -1,0 +1,12 @@
+{
+  "https://status.unity.com/": {
+    "state": "unknown",
+    "source": "webhook-statuspage",
+    "updatedAt": 1755703355560
+  },
+  "https://status.unity.com": {
+    "state": "unknown",
+    "source": "webhook-statuspage",
+    "updatedAt": 1755703367164
+  }
+}

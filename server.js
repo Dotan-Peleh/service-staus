@@ -1,0 +1,626 @@
+'use strict';
+
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const url = require('url');
+const { URLSearchParams } = require('url');
+
+const PORT = process.env.PORT ? Number(process.env.PORT) : 5173;
+const PUBLIC_DIR = __dirname;
+const STORE_FILE = path.join(__dirname, 'status-store.json');
+
+let statusStore = {};
+try {
+  if (fs.existsSync(STORE_FILE)) {
+    statusStore = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')) || {};
+  }
+} catch (_) {
+  statusStore = {};
+}
+
+function saveStore() {
+  try { fs.writeFileSync(STORE_FILE, JSON.stringify(statusStore, null, 2), 'utf8'); } catch (_) {}
+}
+
+function updateStore(key, value) {
+  statusStore[key] = { ...value, updatedAt: Date.now() };
+  saveStore();
+}
+
+function send(res, status, body, headers = {}) {
+  const defaultHeaders = {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+  };
+  res.writeHead(status, { ...defaultHeaders, ...headers });
+  res.end(body);
+}
+
+function serveStatic(req, res) {
+  let pathname = url.parse(req.url).pathname || '/';
+  if (pathname === '/') pathname = '/index.html';
+  const filePath = path.join(PUBLIC_DIR, pathname);
+
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) {
+      return send(res, 404, 'Not found');
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = (
+      {
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'application/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.ico': 'image/x-icon',
+      }[ext] || 'application/octet-stream'
+    );
+    res.writeHead(200, { 'Content-Type': contentType });
+    fs.createReadStream(filePath).pipe(res);
+  });
+}
+
+function proxyFetch(req, res) {
+  const parsed = url.parse(req.url, true);
+  const target = parsed.query.url;
+  if (!target) return send(res, 400, 'Missing url');
+
+  let startUrl;
+  try {
+    startUrl = new URL(target);
+  } catch (e) {
+    // Allow relative URLs to be proxied to this same server
+    try {
+      if (typeof target === 'string' && target.startsWith('/')) {
+        startUrl = new URL(`http://127.0.0.1:${PORT}${target}`);
+      } else {
+        return send(res, 400, 'Invalid url');
+      }
+    } catch (_) {
+      return send(res, 400, 'Invalid url');
+    }
+  }
+
+  const maxRedirects = 5;
+
+  function doRequest(targetUrl, redirectCount) {
+    const lib = targetUrl.protocol === 'http:' ? http : https;
+    const options = {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'ServiceStatusDashboard/1.0',
+        'Accept': 'application/json,text/plain,*/*',
+        'Accept-Encoding': 'identity',
+      },
+    };
+
+    const proxyReq = lib.request(targetUrl, options, (proxyRes) => {
+      const status = proxyRes.statusCode || 0;
+      const location = proxyRes.headers.location;
+
+      if ([301, 302, 303, 307, 308].includes(status) && location && redirectCount < maxRedirects) {
+        try {
+          const nextUrl = new URL(location, targetUrl);
+          return doRequest(nextUrl, redirectCount + 1);
+        } catch (e) {
+          console.error('Proxy redirect parse error:', e.message, 'from', targetUrl.href, 'to', location);
+          return send(res, 502, `Proxy redirect error`);
+        }
+      }
+
+      const chunks = [];
+      proxyRes.on('data', (c) => chunks.push(c));
+      proxyRes.on('end', () => {
+        if (res.headersSent) return;
+        const body = Buffer.concat(chunks);
+        const headers = {
+          'Content-Type': proxyRes.headers['content-type'] || 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+        };
+        if (proxyRes.headers['content-encoding']) {
+          headers['Content-Encoding'] = proxyRes.headers['content-encoding'];
+        }
+        res.writeHead(status || 200, headers);
+        res.end(body);
+      });
+    });
+
+    proxyReq.on('error', (err) => {
+      console.error('Proxy error fetching', targetUrl.href, err && err.code, err && err.message);
+      if (!res.headersSent) {
+        send(res, 502, `Proxy error: ${err.code || ''} ${err.message || ''}`.trim());
+      }
+    });
+    proxyReq.end();
+  }
+
+  doRequest(startUrl, 0);
+}
+
+const server = http.createServer((req, res) => {
+  const pathname = url.parse(req.url).pathname || '/';
+  if (pathname === '/api/fetch') return proxyFetch(req, res);
+  if (pathname === '/api/notify/slack') return notifySlack(req, res);
+  if (pathname === '/api/notify/enabled') return slackEnabled(res);
+  if (pathname === '/api/check-html') return checkHtmlStatus(req, res);
+  if (pathname === '/api/state') return getState(res);
+  if (pathname === '/api/webhooks/statuspage') return webhookStatuspage(req, res);
+  if (pathname === '/api/webhooks/statusgator') return webhookStatusgator(req, res);
+  if (pathname === '/api/firebase/status') return firebaseStatus(req, res);
+  if (pathname === '/api/apple/status') return appleAppStoreStatus(req, res);
+  if (pathname === '/api/facebook/status') return facebookStatus(req, res);
+  if (pathname === '/api/google/play-status') return googlePlayStatus(req, res);
+  if (pathname === '/api/google/cloud-status') return googleCloudStatus(req, res);
+  return serveStatic(req, res);
+});
+
+server.listen(PORT, () => {
+  console.log(`Server running at http://localhost:${PORT}`);
+});
+
+function notifySlack(req, res) {
+  if (req.method !== 'POST') return send(res, 405, 'Method Not Allowed');
+
+  const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || '';
+  const slackBotToken = process.env.SLACK_BOT_TOKEN || '';
+  const slackChannel = process.env.SLACK_CHANNEL || '';
+
+  let body = '';
+  req.on('data', (c) => (body += c));
+  req.on('end', () => {
+    try {
+      const payload = JSON.parse(body || '{}');
+      const text = formatSlackMessage(payload);
+
+      if (slackWebhookUrl) {
+        return postJson(slackWebhookUrl, { text }, (ok, status, resp) => {
+          if (!ok) return send(res, 502, `Slack webhook error: ${status}`);
+          return send(res, 200, 'OK');
+        });
+      }
+
+      if (slackBotToken && slackChannel) {
+        const form = new URLSearchParams({ channel: slackChannel, text });
+        return postForm('https://slack.com/api/chat.postMessage', form, slackBotToken, (ok, status, resp) => {
+          if (!ok) return send(res, 502, `Slack API error: ${status}`);
+          return send(res, 200, 'OK');
+        });
+      }
+
+      // Not configured → no-op success to avoid client errors
+      return send(res, 204, 'Slack disabled');
+    } catch (e) {
+      return send(res, 400, 'Bad Request');
+    }
+  });
+}
+
+function slackEnabled(res) {
+  const enabled = Boolean(process.env.SLACK_WEBHOOK_URL) || (Boolean(process.env.SLACK_BOT_TOKEN) && Boolean(process.env.SLACK_CHANNEL));
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify({ enabled }));
+}
+
+function getState(res) {
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify(statusStore));
+}
+
+function webhookStatuspage(req, res) {
+  const parsed = url.parse(req.url, true);
+  const key = parsed.query.key;
+  if (!key) return send(res, 400, 'Missing key');
+  let raw = '';
+  req.on('data', c => raw += c);
+  req.on('end', () => {
+    let payload = {};
+    try { payload = JSON.parse(raw || '{}'); } catch (_) {
+      try { payload = Object.fromEntries(new URLSearchParams(raw)); } catch (_) {}
+    }
+    // Statuspage webhook: incident.impact and incident.status
+    let result = { state: 'unknown', source: 'webhook-statuspage' };
+    const inc = payload.incident || payload.data || {};
+    if (inc && inc.status) {
+      if (inc.status === 'resolved') {
+        result = { state: 'operational', source: 'webhook-statuspage' };
+      } else {
+        const impact = (inc.impact || inc.impact_override || '').toLowerCase();
+        const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+        result = { state: 'incident', severity, title: inc.name || 'Incident', source: 'webhook-statuspage' };
+      }
+    }
+    updateStore(key, result);
+    return send(res, 204, '');
+  });
+}
+
+function webhookStatusgator(req, res) {
+  const parsed = url.parse(req.url, true);
+  const key = parsed.query.key;
+  if (!key) return send(res, 400, 'Missing key');
+  let raw = '';
+  req.on('data', c => raw += c);
+  req.on('end', () => {
+    let payload = {};
+    try { payload = JSON.parse(raw || '{}'); } catch (_) {}
+    // StatusGator payloads vary; normalize common fields
+    const status = (payload.status || payload.current_status || '').toLowerCase();
+    let result = { state: 'unknown', source: 'webhook-statusgator' };
+    if (['up','operational','ok'].includes(status)) {
+      result = { state: 'operational', source: 'webhook-statusgator' };
+    } else if (status) {
+      const criticalWords = ['down','outage','major','critical'];
+      const severity = criticalWords.some(w => status.includes(w)) ? 'critical' : 'minor';
+      result = { state: 'incident', severity, title: payload.title || payload.summary || 'Incident', source: 'webhook-statusgator' };
+    }
+    updateStore(key, result);
+    return send(res, 204, '');
+  });
+}
+
+async function firebaseStatus(req, res) {
+  // Query Firebase products and incidents, then return a concise status for selected products
+  try {
+    const getJson = (u) => new Promise((resolve, reject) => {
+      const lib = u.startsWith('http:') ? http : https;
+      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
+        const b = [];
+        r.on('data', c => b.push(c));
+        r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch (e) { reject(e); } });
+      }).on('error', reject);
+    });
+
+    const products = await getJson('https://status.firebase.google.com/products.json');
+    const incidents = await getJson('https://status.firebase.google.com/incidents.json');
+
+    const idByTitle = Object.fromEntries((products.products || []).map(p => [p.title.toLowerCase(), p.id]));
+    // Fix Remote Config id if different
+    const remoteConfigId = idByTitle['remote config'] || idByTitle['remoteconfig'] || '5AgCVXiY8zJMBbruVrm8';
+    const authId = idByTitle['authentication'] || 'ty5dcfcAmf92kaN1vKuj';
+    const crashId = idByTitle['crashlytics'] || 'BevPfAqaWeJzx9e2SWic';
+    const selected = new Set([authId, remoteConfigId, crashId]);
+
+    const active = [];
+    for (const inc of incidents) {
+      if (inc.end) continue; // only active
+      // Some records use affected_products: [{id,title}], some use products: [id]
+      let pids = [];
+      if (Array.isArray(inc.affected_products)) pids = inc.affected_products.map(p => p.id);
+      if (Array.isArray(inc.products)) pids = pids.concat(inc.products);
+      const related = pids.filter(pid => selected.has(pid));
+      if (related.length) {
+        const lastUpdate = Array.isArray(inc.updates) && inc.updates.length > 0 ? inc.updates[inc.updates.length - 1] : null;
+        const title = inc.external_desc || (lastUpdate && lastUpdate.text) || 'Active incident';
+        const impact = (inc.status_impact || '').toLowerCase();
+        const severity = /outage|high/.test(impact) ? 'critical' : 'minor';
+        active.push({ title, products: related, severity });
+      }
+    }
+
+    const result = active.length ? { state: 'incident', severity: active[0].severity, title: active[0].title } : { state: 'operational' };
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(result));
+  } catch (e) {
+    send(res, 502, 'Firebase status fetch error');
+  }
+}
+
+async function appleAppStoreStatus(req, res) {
+  try {
+    // Apple publishes JSON or JS-wrapped JSON. Try JSON first, then extract from JS.
+    const fetchText = (u) => new Promise((resolve, reject) => {
+      const lib = u.startsWith('http:') ? http : https;
+      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': '*/*' } }, (r) => {
+        const b = [];
+        r.on('data', c => b.push(c));
+        r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
+      }).on('error', reject);
+    });
+
+    let body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.json');
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch (_) {
+      // Try JS variant
+      body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.js');
+      const start = body.indexOf('{');
+      const end = body.lastIndexOf('}');
+      if (start >= 0 && end > start) data = JSON.parse(body.slice(start, end + 1));
+    }
+    if (!data || !Array.isArray(data.services)) throw new Error('parse');
+
+    const targetNames = new Set(['app store', 'app store connect']);
+    let hasIncident = false;
+    let detail = '';
+    for (const svc of data.services) {
+      const name = String(svc.serviceName || '').toLowerCase();
+      if (!targetNames.has(name)) continue;
+      const events = Array.isArray(svc.events) ? svc.events : [];
+      const active = events.find(e => !e.endDate || (e.eventStatus && String(e.eventStatus).toLowerCase() !== 'resolved'));
+      if (active) {
+        hasIncident = true;
+        detail = active.message || active.userFacingStatus || active.eventStatus || 'Incident reported on Apple System Status';
+        break;
+      }
+    }
+    const result = hasIncident ? { state: 'incident', severity: 'minor', title: 'Apple App Store incident', detail } : { state: 'operational' };
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(result));
+  } catch (e) {
+    send(res, 502, 'Apple status fetch error');
+  }
+}
+
+async function facebookStatus(req, res) {
+  try {
+    const fetchText = (u) => new Promise((resolve, reject) => {
+      const lib = u.startsWith('http:') ? http : https;
+      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'text/html,*/*' } }, (r) => {
+        const b = [];
+        r.on('data', c => b.push(c));
+        r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
+      }).on('error', reject);
+    });
+
+    const body = await fetchText('https://metastatus.com/');
+    const plain = body
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const text = plain.toLowerCase();
+    const hasAllOperational = /all systems operational|no incidents reported|no known issues/i.test(plain) || /operational\s*$/.test(text);
+    const hasInvestigating = /(investigating|identified|monitoring|ongoing|current incident)/i.test(plain);
+    const hasResolved = /(resolved|has been resolved|issue (?:is|was) resolved|restored|closed|ended|back to normal)/i.test(plain);
+    const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
+    const hasMinor = /(partial outage|degraded performance|degradation|disruption)/i.test(plain);
+
+    const extractSnippet = () => {
+      const sentences = plain.split(/(?<=[.!?])\s+/);
+      const idx = sentences.findIndex(s => /outage|incident|degrad|disruption|unavail|resolved|restored|closed/i.test(s));
+      return idx >= 0 ? sentences[idx].trim().slice(0, 240) : '';
+    };
+
+    let result;
+    if (hasAllOperational) {
+      result = { state: 'operational' };
+    } else if (hasInvestigating && (hasCritical || hasMinor)) {
+      result = { state: 'incident', severity: hasCritical ? 'critical' : 'minor', title: extractSnippet() || (hasCritical ? 'Detected outage from Meta Status' : 'Detected degraded service from Meta Status') };
+    } else if ((hasCritical || hasMinor) && hasResolved) {
+      result = { state: 'operational', lastIncident: { title: extractSnippet(), endedAt: null } };
+    } else if (hasCritical || hasMinor) {
+      result = { state: 'operational', lastIncident: { title: extractSnippet(), endedAt: null } };
+    } else {
+      result = { state: 'operational' };
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(result));
+  } catch (e) {
+    send(res, 502, 'Facebook status fetch error');
+  }
+}
+
+async function googlePlayStatus(req, res) {
+  try {
+    const fetchText = (u) => new Promise((resolve, reject) => {
+      const lib = u.startsWith('http:') ? http : https;
+      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'text/html,*/*' } }, (r) => {
+        const b = [];
+        r.on('data', c => b.push(c));
+        r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
+      }).on('error', reject);
+    });
+
+    const body = await fetchText('https://status.play.google.com/');
+    const plain = body
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const text = plain.toLowerCase();
+    const hasMajor = /(major outage|critical|service (outage|down)|unavailable)/i.test(plain);
+    const hasMinor = /(partial outage|degraded|degradation|incident|maintenance)/i.test(plain);
+    const hasResolved = /(resolved|has been resolved|issue (?:is|was) resolved|restored|closed|ended)/i.test(plain);
+    const hasInvestigating = /(investigating|identified|monitoring|ongoing|in progress|mitigating)/i.test(plain);
+    const hasAllOperational = /all systems operational|no incidents reported|no known issues/i.test(plain) || /operational\s*$/.test(text);
+
+    const extractSnippet = () => {
+      const sentences = plain.split(/(?<=[.!?])\s+/);
+      const idx = sentences.findIndex(s => /outage|incident|degrad|disruption|unavail|maintenance|resolved|restored/i.test(s));
+      return idx >= 0 ? sentences[idx].trim().slice(0, 240) : '';
+    };
+
+    let result;
+    if (hasAllOperational) {
+      result = { state: 'operational' };
+    } else if ((hasMajor || hasMinor) && hasInvestigating) {
+      result = { state: 'incident', severity: hasMajor ? 'critical' : 'minor', title: extractSnippet() || (hasMajor ? 'Detected outage from Google Play Status' : 'Detected degraded service from Google Play Status') };
+    } else if ((hasMajor || hasMinor) && hasResolved) {
+      result = { state: 'operational', lastIncident: { title: extractSnippet(), endedAt: null } };
+    } else if (hasMajor || hasMinor) {
+      // Default to operational with a lastIncident if no evidence of ongoing state
+      result = { state: 'operational', lastIncident: { title: extractSnippet(), endedAt: null } };
+    } else {
+      result = { state: 'operational' };
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(result));
+  } catch (e) {
+    send(res, 502, 'Google Play status fetch error');
+  }
+}
+
+async function googleCloudStatus(req, res) {
+  try {
+    const fetchText = (u) => new Promise((resolve, reject) => {
+      const lib = u.startsWith('http:') ? http : https;
+      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'text/html,*/*' } }, (r) => {
+        const b = [];
+        r.on('data', c => b.push(c));
+        r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
+      }).on('error', reject);
+    });
+
+    const body = await fetchText('https://status.cloud.google.com/');
+    const plain = body
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const text = plain.toLowerCase();
+    // Guard against generic marketing text wrongly triggering incidents
+    const sanitized = plain.replace(/See incidents that impact your workloads[\s\S]*?projects,?\s+including[\s\S]*?logs\./i, ' ');
+    const hasMajor = /(major outage|critical|service (outage|down)|incident impacting multiple regions|service disruption)/i.test(sanitized);
+    const hasMinor = /(partial outage|degraded|degradation|disruption)/i.test(sanitized);
+    const hasResolved = /(resolved|has been resolved|issue (?:is|was) resolved|restored|closed|ended)/i.test(sanitized);
+    const hasInvestigating = /(investigating|identified|monitoring|ongoing|in progress|mitigating|current incident)/i.test(sanitized);
+    const hasAllOperational = /all services available|no incidents reported|no known issues|all systems operational/i.test(sanitized) || /operational\s*$/.test(text);
+
+    const extractSnippet = () => {
+      const sentences = sanitized.split(/(?<=[.!?])\s+/);
+      const idx = sentences.findIndex(s => /outage|incident|degrad|disruption|unavail|maintenance|resolved|restored/i.test(s));
+      return idx >= 0 ? sentences[idx].trim().slice(0, 240) : '';
+    };
+
+    let result;
+    if (hasAllOperational) {
+      result = { state: 'operational' };
+    } else if ((hasMajor || hasMinor) && hasInvestigating) {
+      result = { state: 'incident', severity: hasMajor ? 'critical' : 'minor', title: extractSnippet() || (hasMajor ? 'Detected outage from Google Cloud Status' : 'Detected degraded service from Google Cloud Status') };
+    } else if ((hasMajor || hasMinor) && hasResolved) {
+      result = { state: 'operational', lastIncident: { title: extractSnippet(), endedAt: null } };
+    } else if (hasMajor || hasMinor) {
+      result = { state: 'operational', lastIncident: { title: extractSnippet(), endedAt: null } };
+    } else {
+      result = { state: 'operational' };
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(result));
+  } catch (e) {
+    send(res, 502, 'Google Cloud status fetch error');
+  }
+}
+
+function postJson(target, json, cb) {
+  const u = new URL(target);
+  const lib = u.protocol === 'http:' ? http : https;
+  const req = lib.request(u, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'ServiceStatusDashboard/1.0' },
+  }, (resp) => {
+    const chunks = [];
+    resp.on('data', (c) => chunks.push(c));
+    resp.on('end', () => cb((resp.statusCode || 0) >= 200 && (resp.statusCode || 0) < 300, resp.statusCode, Buffer.concat(chunks).toString('utf8')));
+  });
+  req.on('error', () => cb(false, 0, ''));
+  req.end(JSON.stringify(json));
+}
+
+function postForm(target, form, token, cb) {
+  const u = new URL(target);
+  const lib = u.protocol === 'http:' ? http : https;
+  const req = lib.request(u, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+      'Authorization': `Bearer ${token}`,
+      'User-Agent': 'ServiceStatusDashboard/1.0',
+    },
+  }, (resp) => {
+    const chunks = [];
+    resp.on('data', (c) => chunks.push(c));
+    resp.on('end', () => cb((resp.statusCode || 0) >= 200 && (resp.statusCode || 0) < 300, resp.statusCode, Buffer.concat(chunks).toString('utf8')));
+  });
+  req.on('error', () => cb(false, 0, ''));
+  req.end(form.toString());
+}
+
+function formatSlackMessage(p) {
+  const severityEmoji = p.severity === 'critical' ? ':red_circle:' : ':large_yellow_circle:';
+  const title = p.title || 'Service Incident';
+  const name = p.service || 'Service';
+  const eta = p.eta ? `\nPlanned fix: ${new Date(p.eta).toLocaleString()}` : '';
+  const link = p.statusUrl ? `\nStatus: ${p.statusUrl}` : '';
+  return `${severityEmoji} ${name}: ${title}${eta}${link}`;
+}
+
+function checkHtmlStatus(req, res) {
+  const parsed = url.parse(req.url, true);
+  const target = parsed.query.url;
+  if (!target) return send(res, 400, 'Missing url');
+  let targetUrl;
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    return send(res, 400, 'Invalid url');
+  }
+  const lib = targetUrl.protocol === 'http:' ? http : https;
+  const options = {
+    method: 'GET',
+    headers: {
+      'User-Agent': 'ServiceStatusDashboard/1.0',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+  };
+  const reqUp = lib.request(targetUrl, options, (resp) => {
+    const chunks = [];
+    resp.on('data', (c) => chunks.push(c));
+    resp.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      const plain = body
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const text = plain.toLowerCase();
+      // Simple heuristics (expanded)
+      const hasAllOperational = /all systems operational|all services operational|all services (are|now) (available|online)|no incidents reported/i.test(plain) || /operational\s*$/.test(text);
+      const hasMajor = /(major outage|critical outage|critical incident|severe outage|service (outage|down))/i.test(plain);
+      const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|scheduled maintenance)/i.test(plain);
+
+      let result;
+      if (hasMajor) {
+        result = { state: 'incident', severity: 'critical', title: 'Detected outage from status page', eta: null };
+      } else if (hasMinor) {
+        result = { state: 'incident', severity: 'minor', title: 'Detected degraded service from status page', eta: null };
+      } else if (hasAllOperational || /operational/.test(text)) {
+        result = { state: 'operational' };
+      } else {
+        result = { state: 'unknown' };
+      }
+
+      // Extract a brief human-readable detail sentence when we detect incident
+      if (result.state === 'incident') {
+        const sentences = plain.split(/(?<=[.!?])\s+/).slice(0, 50);
+        const idx = sentences.findIndex(s => /outage|disruption|degrad|incident|maintenance|unavail/i.test(s));
+        if (idx >= 0) {
+          const snippet = sentences[idx].trim().slice(0, 240);
+          result.detail = snippet;
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(result));
+    });
+  });
+  reqUp.on('error', (err) => {
+    console.error('HTML check error', targetUrl.href, err && err.code, err && err.message);
+    send(res, 502, 'Upstream error');
+  });
+  reqUp.end();
+}
+
+
