@@ -93,12 +93,23 @@ exports.handler = async (event, context) => {
 
         try {
           const summary = await getJson('https://status.mixpanel.com/api/v2/summary.json');
-          if (summary && Array.isArray(summary.incidents) && summary.incidents.length > 0) {
-            const active = summary.incidents.find(i => i.status !== 'resolved');
-            if (active) {
-              const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
-              const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
-              return json(200, { state: 'incident', severity, title: active.name || 'Service Incident' });
+          if (summary) {
+            if (Array.isArray(summary.incidents) && summary.incidents.length > 0) {
+              const active = summary.incidents.find(i => i.status !== 'resolved');
+              if (active) {
+                const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
+                const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+                return json(200, { state: 'incident', severity, title: active.name || 'Service Incident' });
+              }
+            }
+            if (Array.isArray(summary.scheduled_maintenances) && summary.scheduled_maintenances.length > 0) {
+              const maint = summary.scheduled_maintenances.find(m => m.status !== 'completed');
+              if (maint) {
+                const impact = (maint.impact || maint.impact_override || 'minor').toLowerCase();
+                const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+                const eta = maint.scheduled_until || maint.scheduled_end || maint.scheduled_for || null;
+                return json(200, { state: 'incident', severity, title: maint.name || 'Scheduled maintenance', eta });
+              }
             }
           }
         } catch (_) {}
@@ -119,6 +130,32 @@ exports.handler = async (event, context) => {
         const hasMinor = /(partial outage|degraded|degradation|incident|maintenance)/i.test(plain);
         if (hasMajor) return json(200, { state: 'incident', severity: 'critical', title: 'Detected incident' });
         if (hasMinor) return json(200, { state: 'incident', severity: 'minor', title: 'Detected incident' });
+        return json(200, { state: 'operational' });
+      } catch {
+        return json(200, { state: 'unknown' });
+      }
+    }
+
+    if (path === '/api/slack/status') {
+      try {
+        const getJson = (u) => new Promise((resolve, reject) => {
+          const lib = u.startsWith('http:') ? http : https;
+          lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
+            const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
+          }).on('error', reject);
+        });
+        const data = await getJson('https://status.slack.com/api/v2.0.0/current');
+        if (data && Array.isArray(data.active_incidents) && data.active_incidents.length > 0) {
+          const inc = data.active_incidents[0];
+          const title = inc.title || inc.name || 'Service Incident';
+          const isCritical = (inc.type && String(inc.type).toLowerCase().includes('outage')) || /outage|down|unavailable/i.test(title);
+          return json(200, { state: 'incident', severity: isCritical ? 'critical' : 'minor', title, eta: inc.date_end || inc.resolution_time || null });
+        }
+        if (data && typeof data.status === 'string') {
+          const s = data.status.toLowerCase();
+          if (s === 'ok') return json(200, { state: 'operational' });
+          if (s === 'active') return json(200, { state: 'incident', severity: 'minor', title: 'Active incident' });
+        }
         return json(200, { state: 'operational' });
       } catch {
         return json(200, { state: 'unknown' });
