@@ -140,10 +140,11 @@ exports.handler = async (event, context) => {
       try {
         const getJson = (u) => new Promise((resolve, reject) => {
           const lib = u.startsWith('http:') ? http : https;
-          lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
+          lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json; charset=utf-8', 'Accept-Encoding': 'identity' } }, (r) => {
             const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
           }).on('error', reject);
         });
+
         const data = await getJson('https://status.slack.com/api/v2.0.0/current');
         if (data && Array.isArray(data.active_incidents) && data.active_incidents.length > 0) {
           const inc = data.active_incidents[0];
@@ -156,6 +157,22 @@ exports.handler = async (event, context) => {
           if (s === 'ok') return json(200, { state: 'operational' });
           if (s === 'active') return json(200, { state: 'incident', severity: 'minor', title: 'Active incident' });
         }
+        // Fall through to HTML scrape if API returned unexpected payload
+      } catch {
+        // Ignore and try HTML scrape
+      }
+
+      try {
+        const html = await fetchText('https://status.slack.com/');
+        const plain = html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+        const text = plain.toLowerCase();
+        const allOk = /all systems operational|no incidents reported|no known issues/i.test(plain) || /operational\s*$/.test(text);
+        const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
+        const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|investigating|identified|monitoring)/i.test(plain);
+        const snippet = (()=>{ const s=plain.split(/(?<=[.!?])\s+/); const i=s.findIndex(t=>/outage|incident|degrad|disruption|unavail|maintenance|investigating|identified|monitoring|resolved|restored/i.test(t)); return i>=0?s[i].trim().slice(0,240):''; })();
+        if (allOk) return json(200, { state: 'operational' });
+        if (hasCritical) return json(200, { state: 'incident', severity: 'critical', title: snippet || 'Detected outage from Slack Status' });
+        if (hasMinor) return json(200, { state: 'incident', severity: 'minor', title: snippet || 'Detected degraded service from Slack Status' });
         return json(200, { state: 'operational' });
       } catch {
         return json(200, { state: 'unknown' });
