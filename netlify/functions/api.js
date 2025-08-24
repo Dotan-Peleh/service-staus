@@ -173,7 +173,8 @@ exports.handler = async (event, context) => {
         if (allOk) return json(200, { state: 'operational' });
         if (hasCritical) return json(200, { state: 'incident', severity: 'critical', title: snippet || 'Detected outage from Slack Status' });
         if (hasMinor) return json(200, { state: 'incident', severity: 'minor', title: snippet || 'Detected degraded service from Slack Status' });
-        return json(200, { state: 'operational' });
+        // Inconclusive HTML → do NOT assume green
+        return json(200, { state: 'unknown' });
       } catch {
         return json(200, { state: 'unknown' });
       }
