@@ -842,8 +842,12 @@
                     recordUptime(aggregateKey, severity);
 
                     if (previousStatus !== 'critical' && previousStatus !== 'minor') {
+                        // Show UI toast once when incident first detected (minor or critical)
                         showNotification(`⚠️ ${service.name}: ${displayTitle || 'Incident detected'}`.trim(), severity === 'critical' ? 'error' : 'warning');
-                        notifySlack(service, incidentDetails[service.name]);
+                        // Send external notification ONLY on transition to critical
+                        if (severity === 'critical') {
+                            notifySlack(service, incidentDetails[service.name]);
+                        }
                     }
                     if (verifyElement) verifyElement.style.display = 'none';
                 }

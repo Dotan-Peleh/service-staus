@@ -25,6 +25,10 @@ function fetchText(url) {
 exports.handler = async (event, context) => {
   try {
     const path = event.path.replace(/^\/.netlify\/functions\//, '/');
+    // CORS preflight for notify endpoints
+    if (event.httpMethod === 'OPTIONS' && (path === '/api/notify/slack' || path === '/api/notify/enabled')) {
+      return { statusCode: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' }, body: '' };
+    }
     if (path === '/api/apple/status') {
       // Apple System Status (JSON then JS fallback)
       let body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.json');
@@ -192,6 +196,66 @@ exports.handler = async (event, context) => {
       if (hasInvestigating && (hasCritical || hasMinor)) return json(200, { state: 'incident', severity: hasCritical?'critical':'minor', title: snippet || 'Detected incident' });
       if (hasCritical || hasMinor) return json(200, { state: 'operational', lastIncident: { title: snippet, endedAt: null } });
       return json(200, { state: 'operational' });
+    }
+
+    // Notifications: check if Slack notifications are enabled (via env)
+    if (path === '/api/notify/enabled') {
+      const enabled = Boolean(process.env.SLACK_WEBHOOK_URL) || (Boolean(process.env.SLACK_BOT_TOKEN) && Boolean(process.env.SLACK_CHANNEL));
+      return json(200, { enabled });
+    }
+
+    // Notifications: send Slack message via webhook or bot token
+    if (path === '/api/notify/slack' && event.httpMethod === 'POST') {
+      try {
+        const payload = event.body ? JSON.parse(event.body) : {};
+        const text = (() => {
+          const severityEmoji = payload.severity === 'critical' ? ':red_circle:' : ':large_yellow_circle:';
+          const title = payload.title || 'Service Incident';
+          const name = payload.service || 'Service';
+          const eta = payload.eta ? `\nPlanned fix: ${new Date(payload.eta).toLocaleString()}` : '';
+          const link = payload.statusUrl ? `\nStatus: ${payload.statusUrl}` : '';
+          return `${severityEmoji} ${name}: ${title}${eta}${link}`;
+        })();
+
+        const webhook = process.env.SLACK_WEBHOOK_URL || '';
+        const botToken = process.env.SLACK_BOT_TOKEN || '';
+        const channel = process.env.SLACK_CHANNEL || '';
+
+        // Prefer webhook if available
+        if (webhook) {
+          const u = new URL(webhook);
+          const lib = u.protocol === 'http:' ? http : https;
+          const resp = await new Promise((resolve) => {
+            const req = lib.request(u, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'ServiceStatusDashboard/1.0' } }, (r) => {
+              const b = []; r.on('data', c => b.push(c)); r.on('end', () => resolve({ statusCode: r.statusCode || 0, body: Buffer.concat(b).toString('utf8') }));
+            });
+            req.on('error', () => resolve({ statusCode: 0, body: '' }));
+            req.end(JSON.stringify({ text }));
+          });
+          if (resp.statusCode >= 200 && resp.statusCode < 300) return json(200, { ok: true });
+          return json(502, { ok: false, error: 'Webhook error' });
+        }
+
+        // Fallback: bot token + channel
+        if (botToken && channel) {
+          const u = new URL('https://slack.com/api/chat.postMessage');
+          const lib = u.protocol === 'http:' ? http : https;
+          const resp = await new Promise((resolve) => {
+            const req = lib.request(u, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${botToken}`, 'User-Agent': 'ServiceStatusDashboard/1.0' } }, (r) => {
+              const b = []; r.on('data', c => b.push(c)); r.on('end', () => resolve({ statusCode: r.statusCode || 0, body: Buffer.concat(b).toString('utf8') }));
+            });
+            req.on('error', () => resolve({ statusCode: 0, body: '' }));
+            req.end(JSON.stringify({ channel, text }));
+          });
+          if (resp.statusCode >= 200 && resp.statusCode < 300) return json(200, { ok: true });
+          return json(502, { ok: false, error: 'Slack API error' });
+        }
+
+        // Not configured; succeed no-op
+        return json(204, {});
+      } catch {
+        return json(400, { ok: false, error: 'Bad Request' });
+      }
     }
 
     if (path === '/api/firebase/status') {
