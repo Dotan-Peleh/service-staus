@@ -2,7 +2,7 @@
   publish = "."
   functions = "netlify/functions"
 
-[redirects]
+[[redirects]]
   from = "/api/monitor"
   to = "/.netlify/functions/monitor"
   status = 200
