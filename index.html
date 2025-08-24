@@ -845,8 +845,9 @@
                     if (previousStatus !== 'critical' && previousStatus !== 'minor') {
                         showNotification(`⚠️ ${service.name}: ${displayTitle || 'Incident detected'}`.trim(), severity === 'critical' ? 'error' : 'warning');
                     }
-                    // External notification when transitioning INTO critical (including from minor)
-                    if (severity === 'critical' && previousStatus !== 'critical') {
+                    // External notification when transitioning INTO any incident (minor or critical)
+                    if ((severity === 'critical' && previousStatus !== 'critical') ||
+                        (severity === 'minor' && previousStatus !== 'minor')) {
                         notifySlack(service, incidentDetails[service.name]);
                     }
                     if (verifyElement) verifyElement.style.display = 'none';
@@ -860,13 +861,18 @@
         function getCandidateEndpoints(checkUrl) {
             if (!checkUrl) return [];
             const endpoints = new Set();
-            // If it's Slack, use as-is
+            // Local normalized backend endpoints: use as-is
+            if (checkUrl.startsWith('/api/')) {
+                endpoints.add(checkUrl);
+                return Array.from(endpoints);
+            }
+            // Slack official API: use as-is
             if (/status\.slack\.com\/api\//.test(checkUrl)) {
                 endpoints.add(checkUrl);
                 return Array.from(endpoints);
             }
-            // Statuspage variants: prefer summary.json then status.json
-            if (/\/api\//.test(checkUrl)) {
+            // Statuspage JSON variants: prefer summary.json then status.json
+            if (/\/api\/v\d+\/(summary|status)\.json$/.test(checkUrl)) {
                 const url1 = checkUrl.replace(/status\.json$/, 'summary.json');
                 const url2 = checkUrl.replace(/summary\.json$/, 'status.json');
                 endpoints.add(url1);

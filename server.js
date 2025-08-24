@@ -157,12 +157,134 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/facebook/status') return facebookStatus(req, res);
   if (pathname === '/api/google/play-status') return googlePlayStatus(req, res);
   if (pathname === '/api/google/cloud-status') return googleCloudStatus(req, res);
+  if (pathname === '/api/mixpanel/status') return mixpanelStatus(req, res);
+  if (pathname === '/api/slack/status') return slackStatus(req, res);
   return serveStatic(req, res);
 });
 
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
+
+// --- Background monitor for all services ---
+const SERVICE_MONITORS = [
+  { name: 'Google Play Store', type: 'local', url: `http://127.0.0.1:${PORT}/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
+  { name: 'Google Play Services', type: 'local', url: `http://127.0.0.1:${PORT}/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
+  { name: 'Apple App Store', type: 'local', url: `http://127.0.0.1:${PORT}/api/apple/status`, statusUrl: 'https://developer.apple.com/system-status/' },
+  { name: 'Firebase', type: 'local', url: `http://127.0.0.1:${PORT}/api/firebase/status`, statusUrl: 'https://status.firebase.google.com/' },
+  { name: 'Mixpanel', type: 'local', url: `http://127.0.0.1:${PORT}/api/mixpanel/status`, statusUrl: 'https://status.mixpanel.com/' },
+  { name: 'Singular', type: 'statuspage', url: 'https://status.singular.net/api/v2/summary.json', statusUrl: 'https://status.singular.net/' },
+  { name: 'Sentry', type: 'statuspage', url: 'https://status.sentry.io/api/v2/summary.json', statusUrl: 'https://status.sentry.io/' },
+  { name: 'Unity LevelPlay', type: 'statuspage', url: 'https://unity.statuspage.io/api/v2/summary.json', statusUrl: 'https://status.unity.com/' },
+  { name: 'Facebook Audience Network', type: 'local', url: `http://127.0.0.1:${PORT}/api/facebook/status`, statusUrl: 'https://metastatus.com/' },
+  { name: 'Google AdMob', type: 'local', url: `http://127.0.0.1:${PORT}/api/google/cloud-status`, statusUrl: 'https://status.cloud.google.com/' },
+  { name: 'Unity Ads', type: 'statuspage', url: 'https://unity.statuspage.io/api/v2/summary.json', statusUrl: 'https://status.unity.com/' },
+  { name: 'Unity Cloud Services', type: 'statuspage', url: 'https://unity.statuspage.io/api/v2/summary.json', statusUrl: 'https://status.unity.com/' },
+  { name: 'Realm Database', type: 'statuspage', url: 'https://status.mongodb.com/api/v2/summary.json', statusUrl: 'https://status.mongodb.com/' },
+  { name: 'Slack', type: 'local', url: `http://127.0.0.1:${PORT}/api/slack/status`, statusUrl: 'https://status.slack.com/' },
+  { name: 'Notion', type: 'statuspage', url: 'https://www.notion-status.com/api/v2/summary.json', statusUrl: 'https://www.notion-status.com/' },
+  { name: 'Figma', type: 'statuspage', url: 'https://status.figma.com/api/v2/summary.json', statusUrl: 'https://status.figma.com/' },
+  { name: 'Jira Software', type: 'statuspage', url: 'https://jira-software.status.atlassian.com/api/v2/summary.json', statusUrl: 'https://jira-software.status.atlassian.com/' },
+];
+
+const monitorLast = new Map(); // name -> { state, severity?, startedAt? }
+
+function fetchJson(u) {
+  return new Promise((resolve, reject) => {
+    const lib = u.startsWith('http:') ? http : https;
+    lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
+      const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
+    }).on('error', reject);
+  });
+}
+
+function normalizeFromLocal(data) {
+  if (data && typeof data.state === 'string') {
+    return { state: data.state, severity: data.severity || 'minor', title: data.title || null, startedAt: data.startedAt || null };
+  }
+  return { state: 'unknown' };
+}
+
+function normalizeFromStatuspage(summary) {
+  try {
+    if (summary && (Array.isArray(summary.incidents) || Array.isArray(summary.scheduled_maintenances))) {
+      const active = (summary.incidents || []).find(i => i.status !== 'resolved');
+      if (active) {
+        const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
+        const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+        const startedAt = active.started_at || active.created_at || null;
+        return { state: 'incident', severity, title: active.name || 'Service Incident', startedAt };
+      }
+      return { state: 'operational' };
+    }
+  } catch (_) {}
+  // Fallback to indicator if present
+  try {
+    if (summary && summary.status && typeof summary.status.indicator === 'string') {
+      const ind = String(summary.status.indicator).toLowerCase();
+      if (ind === 'none') return { state: 'operational' };
+      if (ind === 'minor') return { state: 'incident', severity: 'minor', title: summary.status.description || 'Service Incident' };
+      if (ind === 'major' || ind === 'critical') return { state: 'incident', severity: 'critical', title: summary.status.description || 'Service Incident' };
+    }
+  } catch (_) {}
+  return { state: 'unknown' };
+}
+
+function notifySlackBackground(message) {
+  const webhook = process.env.SLACK_WEBHOOK_URL || '';
+  const token = process.env.SLACK_BOT_TOKEN || '';
+  const channel = process.env.SLACK_CHANNEL || '';
+  if (webhook) {
+    return postJson(webhook, { text: message }, () => {});
+  }
+  if (token && channel) {
+    const form = new URLSearchParams({ channel, text: message });
+    return postForm('https://slack.com/api/chat.postMessage', form, token, () => {});
+  }
+}
+
+async function pollAllServicesOnce() {
+  for (const svc of SERVICE_MONITORS) {
+    try {
+      const raw = await fetchJson(svc.url);
+      const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
+      const prev = monitorLast.get(svc.name) || { state: 'unknown', startedAt: null };
+
+      // Transition into incident
+      if (current.state === 'incident' && prev.state !== 'incident') {
+        const startedAt = current.startedAt || new Date().toISOString();
+        monitorLast.set(svc.name, { state: 'incident', severity: current.severity || 'minor', startedAt });
+        const started = new Date(startedAt).toLocaleString();
+        const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+        const title = current.title || 'Incident detected';
+        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+        notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+        continue;
+      }
+
+      // Transition back to operational
+      if (current.state === 'operational' && prev.state === 'incident') {
+        const ended = new Date().toLocaleString();
+        const started = prev.startedAt ? new Date(prev.startedAt).toLocaleString() : 'Unknown';
+        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+        notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${started}\nResolved: ${ended}${link}`);
+        monitorLast.set(svc.name, { state: 'operational', startedAt: null });
+        continue;
+      }
+
+      // Keep state in sync when not changing
+      if (prev.state !== current.state) {
+        monitorLast.set(svc.name, { state: current.state, startedAt: null });
+      }
+    } catch (_) {
+      // ignore errors per service to avoid blocking the loop
+    }
+  }
+}
+
+// Start immediately then every 5 minutes
+pollAllServicesOnce();
+setInterval(pollAllServicesOnce, 5 * 60 * 1000);
 
 function notifySlack(req, res) {
   if (req.method !== 'POST') return send(res, 405, 'Method Not Allowed');
@@ -180,7 +302,12 @@ function notifySlack(req, res) {
 
       if (slackWebhookUrl) {
         return postJson(slackWebhookUrl, { text }, (ok, status, resp) => {
-          if (!ok) return send(res, 502, `Slack webhook error: ${status}`);
+          if (!ok) return send(res, 502, `Slack webhook http error: ${status}`);
+          // Incoming webhooks return 'ok' on success; some apps return 2xx with body
+          const body = (resp || '').trim().toLowerCase();
+          if (body && body !== 'ok') {
+            return send(res, 502, `Slack webhook response: ${resp}`);
+          }
           return send(res, 200, 'OK');
         });
       }
@@ -188,8 +315,15 @@ function notifySlack(req, res) {
       if (slackBotToken && slackChannel) {
         const form = new URLSearchParams({ channel: slackChannel, text });
         return postForm('https://slack.com/api/chat.postMessage', form, slackBotToken, (ok, status, resp) => {
-          if (!ok) return send(res, 502, `Slack API error: ${status}`);
-          return send(res, 200, 'OK');
+          if (!ok) return send(res, 502, `Slack API http error: ${status}`);
+          try {
+            const parsed = JSON.parse(resp || '{}');
+            if (parsed && parsed.ok) return send(res, 200, 'OK');
+            const err = parsed && parsed.error ? parsed.error : 'unknown_error';
+            return send(res, 502, `Slack API error: ${err}`);
+          } catch (_) {
+            return send(res, 502, `Slack API parse error`);
+          }
         });
       }
 
@@ -511,6 +645,136 @@ async function googleCloudStatus(req, res) {
     res.end(JSON.stringify(result));
   } catch (e) {
     send(res, 502, 'Google Cloud status fetch error');
+  }
+}
+
+async function mixpanelStatus(req, res) {
+  try {
+    const getJson = (u) => new Promise((resolve, reject) => {
+      const lib = u.startsWith('http:') ? http : https;
+      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
+        const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
+      }).on('error', reject);
+    });
+
+    try {
+      const summary = await getJson('https://status.mixpanel.com/api/v2/summary.json');
+      if (summary) {
+        if (Array.isArray(summary.incidents) && summary.incidents.length > 0) {
+          const active = summary.incidents.find(i => i.status !== 'resolved');
+          if (active) {
+            const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
+            const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            return res.end(JSON.stringify({ state: 'incident', severity, title: active.name || 'Service Incident' }));
+          }
+        }
+        if (Array.isArray(summary.scheduled_maintenances) && summary.scheduled_maintenances.length > 0) {
+          const maint = summary.scheduled_maintenances.find(m => m.status !== 'completed');
+          if (maint) {
+            const impact = (maint.impact || maint.impact_override || 'minor').toLowerCase();
+            const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+            const eta = maint.scheduled_until || maint.scheduled_end || maint.scheduled_for || null;
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            return res.end(JSON.stringify({ state: 'incident', severity, title: maint.name || 'Scheduled maintenance', eta }));
+          }
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const status = await getJson('https://status.mixpanel.com/api/v2/status.json');
+      const indicator = status && status.status && String(status.status.indicator || '').toLowerCase();
+      if (indicator === 'none') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        return res.end(JSON.stringify({ state: 'operational' }));
+      }
+      if (indicator === 'minor') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        return res.end(JSON.stringify({ state: 'incident', severity: 'minor', title: status.status.description || 'Service Incident' }));
+      }
+      if (indicator === 'major' || indicator === 'critical') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        return res.end(JSON.stringify({ state: 'incident', severity: 'critical', title: status.status.description || 'Service Incident' }));
+      }
+    } catch (_) {}
+
+    const html = await new Promise((resolve, reject) => {
+      https.get('https://status.mixpanel.com/', { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'text/html,*/*' } }, (r) => {
+        const b = []; r.on('data', c => b.push(c)); r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
+      }).on('error', reject);
+    });
+    const plain = html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+    const hasMajor = /(major outage|critical|service (outage|down))/i.test(plain);
+    const hasMinor = /(partial outage|degraded|degradation|incident|maintenance)/i.test(plain);
+    const result = hasMajor ? { state: 'incident', severity: 'critical', title: 'Detected incident' } : hasMinor ? { state: 'incident', severity: 'minor', title: 'Detected incident' } : { state: 'operational' };
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(result));
+  } catch (_) {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ state: 'unknown' }));
+  }
+}
+
+async function slackStatus(req, res) {
+  try {
+    const getJson = (u) => new Promise((resolve, reject) => {
+      const lib = u.startsWith('http:') ? http : https;
+      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json; charset=utf-8', 'Accept-Encoding': 'identity' } }, (r) => {
+        const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
+      }).on('error', reject);
+    });
+
+    try {
+      const data = await getJson('https://status.slack.com/api/v2.0.0/current');
+      if (data && Array.isArray(data.active_incidents) && data.active_incidents.length > 0) {
+        const inc = data.active_incidents[0];
+        const title = inc.title || inc.name || 'Service Incident';
+        const isCritical = (inc.type && String(inc.type).toLowerCase().includes('outage')) || /outage|down|unavailable/i.test(title);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        return res.end(JSON.stringify({ state: 'incident', severity: isCritical ? 'critical' : 'minor', title, eta: inc.date_end || inc.resolution_time || null }));
+      }
+      if (data && typeof data.status === 'string') {
+        const s = data.status.toLowerCase();
+        if (s === 'ok') {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+          return res.end(JSON.stringify({ state: 'operational' }));
+        }
+        if (s === 'active') {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+          return res.end(JSON.stringify({ state: 'incident', severity: 'minor', title: 'Active incident' }));
+        }
+      }
+    } catch (_) {}
+
+    // HTML fallback, never assume green on inconclusive
+    const html = await new Promise((resolve, reject) => {
+      https.get('https://status.slack.com/', { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'text/html,*/*' } }, (r) => {
+        const b = []; r.on('data', c => b.push(c)); r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
+      }).on('error', reject);
+    });
+    const plain = html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+    const text = plain.toLowerCase();
+    const allOk = /all systems operational|no incidents reported|no known issues/i.test(plain) || /operational\s*$/.test(text);
+    const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
+    const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|investigating|identified|monitoring)/i.test(plain);
+    if (allOk) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ state: 'operational' }));
+    }
+    if (hasCritical) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ state: 'incident', severity: 'critical', title: 'Detected outage from Slack Status' }));
+    }
+    if (hasMinor) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ state: 'incident', severity: 'minor', title: 'Detected degraded service from Slack Status' }));
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    return res.end(JSON.stringify({ state: 'unknown' }));
+  } catch (_) {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ state: 'unknown' }));
   }
 }
 
