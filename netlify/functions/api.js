@@ -348,6 +348,24 @@ exports.handler = async (event, context) => {
       }
     }
 
+    // Alias for monitor function so it can be invoked via /api/monitor
+    if (path === '/api/monitor') {
+      try {
+        const base = (event.headers && (event.headers['x-forwarded-proto'] || event.headers['x-forwarded-protocol'] || 'https')) + '://' + ((event.headers && (event.headers['x-forwarded-host'] || event.headers.host)) || '');
+        const u = new URL('/.netlify/functions/monitor', base);
+        const lib = u.protocol === 'http:' ? http : https;
+        const resp = await new Promise((resolve) => {
+          const req = lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0' } }, (r) => {
+            const b = []; r.on('data', c => b.push(c)); r.on('end', () => resolve({ statusCode: r.statusCode || 200, body: Buffer.concat(b).toString('utf8') }));
+          });
+          req.on('error', () => resolve({ statusCode: 502, body: 'error' }));
+        });
+        return { statusCode: resp.statusCode, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: resp.body || 'ok' };
+      } catch {
+        return json(502, { error: 'Monitor invoke error' });
+      }
+    }
+
     return json(404, { error: 'Not found' });
   } catch (e) {
     return json(500, { error: 'Server error' });
