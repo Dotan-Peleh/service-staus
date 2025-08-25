@@ -156,6 +156,9 @@ exports.handler = async (event, context) => {
           const isCritical = (inc.type && String(inc.type).toLowerCase().includes('outage')) || /outage|down|unavailable/i.test(title);
           return json(200, { state: 'incident', severity: isCritical ? 'critical' : 'minor', title, eta: inc.date_end || inc.resolution_time || null });
         }
+        if (data && Array.isArray(data.active_incidents) && data.active_incidents.length === 0) {
+          return json(200, { state: 'operational' });
+        }
         if (data && typeof data.status === 'string') {
           const s = data.status.toLowerCase();
           if (s === 'ok') return json(200, { state: 'operational' });
@@ -181,6 +184,51 @@ exports.handler = async (event, context) => {
         return json(200, { state: 'unknown' });
       } catch {
         return json(200, { state: 'unknown' });
+      }
+    }
+
+    // Normalize Statuspage-based services with optional last resolved incident
+    if (path.startsWith('/api/statuspage')) {
+      const params = event.queryStringParameters || {};
+      let base = params.base;
+      if (!base && event.rawQuery) {
+        const m = event.rawQuery.match(/(?:^|&)base=([^&]+)/);
+        if (m) base = decodeURIComponent(m[1]);
+      }
+      if (!base) return json(400, { error: 'Missing base' });
+      try {
+        const summaryUrl = new URL('/api/v2/summary.json', base).toString();
+        const incidentsUrl = new URL('/api/v2/incidents.json', base).toString();
+
+        const getJson = (u) => new Promise((resolve, reject) => {
+          const lib = u.startsWith('http:') ? http : https;
+          lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
+            const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
+          }).on('error', reject);
+        });
+
+        const summary = await getJson(summaryUrl);
+        if (summary && Array.isArray(summary.incidents)) {
+          const active = summary.incidents.find(i => i.status !== 'resolved');
+          if (active) {
+            const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
+            const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+            const startedAt = active.started_at || active.created_at || null;
+            return json(200, { state: 'incident', severity, title: active.name || 'Service Incident', eta: null, detail: null, startedAt });
+          }
+        }
+        // No active incidents: fetch last resolved
+        let lastIncident = null;
+        try {
+          const incidents = await getJson(incidentsUrl);
+          if (Array.isArray(incidents)) {
+            const resolved = incidents.find(i => i.status === 'resolved');
+            if (resolved) lastIncident = { title: resolved.name || 'Resolved incident', endedAt: resolved.resolved_at || resolved.updated_at || null };
+          }
+        } catch (_) {}
+        return json(200, lastIncident ? { state: 'operational', lastIncident } : { state: 'operational' });
+      } catch {
+        return json(502, { state: 'unknown' });
       }
     }
 

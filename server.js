@@ -734,6 +734,10 @@ async function slackStatus(req, res) {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
         return res.end(JSON.stringify({ state: 'incident', severity: isCritical ? 'critical' : 'minor', title, eta: inc.date_end || inc.resolution_time || null }));
       }
+      if (data && Array.isArray(data.active_incidents) && data.active_incidents.length === 0) {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        return res.end(JSON.stringify({ state: 'operational' }));
+      }
       if (data && typeof data.status === 'string') {
         const s = data.status.toLowerCase();
         if (s === 'ok') {
