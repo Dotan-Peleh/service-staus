@@ -154,7 +154,6 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/webhooks/statusgator') return webhookStatusgator(req, res);
   if (pathname === '/api/firebase/status') return firebaseStatus(req, res);
   if (pathname === '/api/apple/status') return appleAppStoreStatus(req, res);
-  if (pathname === '/api/apple/game-center-status') return appleGameCenterStatus(req, res);
   if (pathname === '/api/facebook/status') return facebookStatus(req, res);
   if (pathname === '/api/google/play-status') return googlePlayStatus(req, res);
   if (pathname === '/api/google/cloud-status') return googleCloudStatus(req, res);
@@ -172,14 +171,12 @@ const SERVICE_MONITORS = [
   { name: 'Google Play Store', type: 'local', url: `http://127.0.0.1:${PORT}/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
   { name: 'Google Play Services', type: 'local', url: `http://127.0.0.1:${PORT}/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
   { name: 'Apple App Store', type: 'local', url: `http://127.0.0.1:${PORT}/api/apple/status`, statusUrl: 'https://developer.apple.com/system-status/' },
-  { name: 'Apple Game Center', type: 'local', url: `http://127.0.0.1:${PORT}/api/apple/game-center-status`, statusUrl: 'https://developer.apple.com/system-status/' },
   { name: 'Firebase', type: 'local', url: `http://127.0.0.1:${PORT}/api/firebase/status`, statusUrl: 'https://status.firebase.google.com/' },
   { name: 'Mixpanel', type: 'local', url: `http://127.0.0.1:${PORT}/api/mixpanel/status`, statusUrl: 'https://status.mixpanel.com/' },
   { name: 'Singular', type: 'statuspage', url: 'https://status.singular.net/api/v2/summary.json', statusUrl: 'https://status.singular.net/' },
   { name: 'Sentry', type: 'statuspage', url: 'https://status.sentry.io/api/v2/summary.json', statusUrl: 'https://status.sentry.io/' },
   { name: 'Unity LevelPlay', type: 'local', url: `http://127.0.0.1:${PORT}/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
   { name: 'Facebook Audience Network', type: 'local', url: `http://127.0.0.1:${PORT}/api/facebook/status`, statusUrl: 'https://metastatus.com/' },
-  { name: 'Facebook SDK', type: 'local', url: `http://127.0.0.1:${PORT}/api/facebook/status`, statusUrl: 'https://metastatus.com/' },
   { name: 'Google AdMob', type: 'local', url: `http://127.0.0.1:${PORT}/api/google/cloud-status`, statusUrl: 'https://status.cloud.google.com/' },
   { name: 'Unity Ads', type: 'local', url: `http://127.0.0.1:${PORT}/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
   { name: 'Unity Cloud Services', type: 'local', url: `http://127.0.0.1:${PORT}/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
@@ -492,39 +489,6 @@ async function appleAppStoreStatus(req, res) {
     res.end(JSON.stringify(result));
   } catch (e) {
     send(res, 502, 'Apple status fetch error');
-  }
-}
-
-async function appleGameCenterStatus(req, res) {
-  try {
-    const fetchText = (u) => new Promise((resolve, reject) => {
-      const lib = u.startsWith('http:') ? http : https;
-      lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': '*/*' } }, (r) => {
-        const b = []; r.on('data', c => b.push(c)); r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
-      }).on('error', reject);
-    });
-
-    let body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.json');
-    let data;
-    try { data = JSON.parse(body); } catch (_) {
-      body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.js');
-      const start = body.indexOf('{'); const end = body.lastIndexOf('}');
-      if (start >= 0 && end > start) data = JSON.parse(body.slice(start, end + 1));
-    }
-    if (!data || !Array.isArray(data.services)) throw new Error('parse');
-    let hasIncident = false; let detail = '';
-    for (const svc of data.services) {
-      const name = String(svc.serviceName || '').toLowerCase();
-      if (name !== 'game center') continue;
-      const events = Array.isArray(svc.events) ? svc.events : [];
-      const active = events.find(e => !e.endDate || (e.eventStatus && String(e.eventStatus).toLowerCase() !== 'resolved'));
-      if (active) { hasIncident = true; detail = active.message || active.userFacingStatus || active.eventStatus || 'Incident reported'; break; }
-    }
-    const result = hasIncident ? { state: 'incident', severity: 'minor', title: 'Apple Game Center incident', detail } : { state: 'operational' };
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify(result));
-  } catch (e) {
-    send(res, 502, 'Apple Game Center status fetch error');
   }
 }
 
