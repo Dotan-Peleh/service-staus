@@ -764,7 +764,9 @@
                         const endpoint = candidates[i];
                         const controller = new AbortController();
                         const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-                        const response = await fetch(`/api/fetch?url=${encodeURIComponent(endpoint)}`, { cache: 'no-store', signal: controller.signal });
+                        const isInternal = endpoint.startsWith('/api/');
+                        const urlToFetch = isInternal ? endpoint : `/api/fetch?url=${encodeURIComponent(endpoint)}`;
+                        const response = await fetch(urlToFetch, { cache: 'no-store', signal: controller.signal });
                         clearTimeout(timeout);
                         if (response.ok) {
                             const data = await response.json();
