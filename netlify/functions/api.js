@@ -14,7 +14,7 @@ function json(status, obj) {
 function fetchText(url) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('http:') ? http : https;
-    lib.get(url, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': '*/*' } }, (r) => {
+    lib.get(url, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': '*/*', 'Accept-Encoding': 'identity' } }, (r) => {
       const b = [];
       r.on('data', c => b.push(c));
       r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
