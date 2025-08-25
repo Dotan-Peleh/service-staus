@@ -41,6 +41,19 @@ Behavior details
 - Relative URL proxy: GET /api/fetch?url=/api/... is supported; relative URLs resolve to http://127.0.0.1:5173.
 - Persistence: Webhook updates are saved to status-store.json and shown immediately on load via /api/state.
 
+Unity status (Statuspal)
+------------------------
+- Unity moved to a Statuspal-powered page (`https://status.unity.com/`).
+- We detect Unity incidents by scraping the public page via an HTML heuristic endpoint:
+  - `/api/check-html?url=https://status.unity.com/`
+- Frontend entries for `Unity LevelPlay`, `Unity Ads`, and `Unity Cloud Services` use the HTML checker and share the same `statusUrl`.
+
+Backend monitoring
+------------------
+- The local server (`server.js`) polls all services every 5 minutes and sends Slack notifications on state transitions (into incident and back to operational).
+- The production Netlify scheduled function (`netlify/functions/monitor.js`) does the same using the site base URL.
+- Page visits do not send Slack messages (client-side Slack notifications are disabled). Only the backend monitor posts.
+
 Webhooks (push updates)
 -----------------------
 Apple doesn’t provide webhooks; use an aggregator (e.g., StatusGator) to push updates.
@@ -84,6 +97,25 @@ export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"
 export SLACK_BOT_TOKEN="xoxb-..."; export SLACK_CHANNEL="#alerts"
 node server.js
 ```
+
+Netlify configuration for Slack
+-------------------------------
+1) Site settings → Build & deploy → Environment → Add variable
+   - `SLACK_WEBHOOK_URL` = your Incoming Webhook URL (recommended)
+   - or `SLACK_BOT_TOKEN` + `SLACK_CHANNEL` (channel ID)
+2) Deploy (prefer “Clear cache and deploy site”).
+3) Verify: `https://<site>/api/notify/enabled` returns `{"enabled": true}`.
+4) Test send:
+```bash
+curl -X POST https://<site>/api/notify/slack \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"Unity LevelPlay","severity":"minor","title":"Test incident","statusUrl":"https://status.unity.com/"}'
+```
+
+Notifications behavior
+----------------------
+- Client-side Slack notifications are disabled; visiting/refreshing the dashboard will not send alerts.
+- Alerts are emitted only on state transitions detected by the backend monitor (local or Netlify scheduled function).
 
 Troubleshooting
 ---------------
