@@ -175,11 +175,11 @@ const SERVICE_MONITORS = [
   { name: 'Mixpanel', type: 'local', url: `http://127.0.0.1:${PORT}/api/mixpanel/status`, statusUrl: 'https://status.mixpanel.com/' },
   { name: 'Singular', type: 'statuspage', url: 'https://status.singular.net/api/v2/summary.json', statusUrl: 'https://status.singular.net/' },
   { name: 'Sentry', type: 'statuspage', url: 'https://status.sentry.io/api/v2/summary.json', statusUrl: 'https://status.sentry.io/' },
-  // Unity: aggregate all Unity services into a single monitor to avoid duplicate Slack alerts
-  { name: 'Unity Services', type: 'local', url: `http://127.0.0.1:${PORT}/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
+  { name: 'Unity LevelPlay', type: 'local', url: `http://127.0.0.1:${PORT}/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
   { name: 'Facebook Audience Network', type: 'local', url: `http://127.0.0.1:${PORT}/api/facebook/status`, statusUrl: 'https://metastatus.com/' },
   { name: 'Google AdMob', type: 'local', url: `http://127.0.0.1:${PORT}/api/google/cloud-status`, statusUrl: 'https://status.cloud.google.com/' },
-  // Removed duplicate Unity monitors (Ads, Cloud Services) – covered by 'Unity Services'
+  { name: 'Unity Ads', type: 'local', url: `http://127.0.0.1:${PORT}/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
+  { name: 'Unity Cloud Services', type: 'local', url: `http://127.0.0.1:${PORT}/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
   { name: 'Realm Database', type: 'statuspage', url: 'https://status.mongodb.com/api/v2/summary.json', statusUrl: 'https://status.mongodb.com/' },
   { name: 'Slack', type: 'local', url: `http://127.0.0.1:${PORT}/api/slack/status`, statusUrl: 'https://status.slack.com/' },
   { name: 'Notion', type: 'statuspage', url: 'https://www.notion-status.com/api/v2/summary.json', statusUrl: 'https://www.notion-status.com/' },
