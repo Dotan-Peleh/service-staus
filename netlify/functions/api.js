@@ -232,6 +232,45 @@ exports.handler = async (event, context) => {
       }
     }
 
+    // Slack diagnostics to understand unknown cases
+    if (path === '/api/slack/debug') {
+      try {
+        const currentUrl = 'https://status.slack.com/api/v2.0.0/current';
+        const currentDiag = await new Promise((resolve) => {
+          const lib = currentUrl.startsWith('http:') ? http : https;
+          const req = lib.get(currentUrl, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json', 'Accept-Encoding': 'identity' } }, (r) => {
+            const b = []; r.on('data', c => b.push(c)); r.on('end', () => {
+              const body = Buffer.concat(b).toString('utf8');
+              let parsed = null; let parseError = null;
+              try { parsed = JSON.parse(body); } catch (e) { parseError = String(e && e.message || 'parse_error'); }
+              resolve({ statusCode: r.statusCode || 0, bodySample: body.slice(0, 400), parsed, parseError });
+            });
+          });
+          req.on('error', (e) => resolve({ statusCode: 0, error: String(e && e.message || 'request_error') }));
+        });
+
+        const htmlUrl = 'https://status.slack.com/';
+        const htmlDiag = await new Promise((resolve) => {
+          const lib = htmlUrl.startsWith('http:') ? http : https;
+          const req = lib.get(htmlUrl, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'text/html', 'Accept-Encoding': 'identity' } }, (r) => {
+            const b = []; r.on('data', c => b.push(c)); r.on('end', () => {
+              const body = Buffer.concat(b).toString('utf8');
+              const plain = body.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+              const allOk = /all systems operational|all systems normal|no incidents reported|no known issues|slack is (operating|up and running) (normally|normal)?/i.test(plain);
+              const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
+              const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|investigating|identified|monitoring)/i.test(plain);
+              resolve({ statusCode: r.statusCode || 0, bodySample: plain.slice(0, 400), allOk, hasCritical, hasMinor });
+            });
+          });
+          req.on('error', (e) => resolve({ statusCode: 0, error: String(e && e.message || 'request_error') }));
+        });
+
+        return json(200, { current: currentDiag, html: htmlDiag });
+      } catch {
+        return json(502, { error: 'diag_error' });
+      }
+    }
+
     if (path === '/api/facebook/status') {
       const body = await fetchText('https://metastatus.com/');
       const plain = body.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
