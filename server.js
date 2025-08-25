@@ -188,6 +188,8 @@ const SERVICE_MONITORS = [
 ];
 
 const monitorLast = new Map(); // name -> { state, severity?, startedAt? }
+const notifyLast = new Map(); // name -> last notified timestamp (ms)
+const COOLDOWN_MINUTES = Number(process.env.NOTIFY_COOLDOWN_MINUTES || '180');
 
 function fetchJson(u) {
   return new Promise((resolve, reject) => {
@@ -254,11 +256,18 @@ async function pollAllServicesOnce() {
       if (current.state === 'incident' && prev.state !== 'incident') {
         const startedAt = current.startedAt || new Date().toISOString();
         monitorLast.set(svc.name, { state: 'incident', severity: current.severity || 'minor', startedAt });
-        const started = new Date(startedAt).toLocaleString();
-        const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
-        const title = current.title || 'Incident detected';
-        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+        // Cooldown dedupe for local monitor
+        const lastTs = notifyLast.get(svc.name) || 0;
+        const nowTs = Date.now();
+        const withinCooldown = lastTs && (nowTs - lastTs) < COOLDOWN_MINUTES * 60 * 1000;
+        if (!withinCooldown) {
+          const started = new Date(startedAt).toLocaleString();
+          const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+          const title = current.title || 'Incident detected';
+          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+          notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+          notifyLast.set(svc.name, nowTs);
+        }
         continue;
       }
 

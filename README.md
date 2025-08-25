@@ -116,6 +116,9 @@ Notifications behavior
 ----------------------
 - Client-side Slack notifications are disabled; visiting/refreshing the dashboard will not send alerts.
 - Alerts are emitted only on state transitions detected by the backend monitor (local or Netlify scheduled function).
+ - To prevent repeated alerts after cold starts, a cooldown suppresses duplicate notifications for the same service.
+   - Configure minutes via `NOTIFY_COOLDOWN_MINUTES` (default 180 minutes).
+   - Netlify uses Blobs storage (`status-notify` store) to persist last-notified timestamps across function instances.
 
 Troubleshooting
 ---------------

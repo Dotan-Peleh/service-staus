@@ -2,6 +2,38 @@
 
 const http = require('http');
 const https = require('https');
+let netlifyBlobs = null;
+try { netlifyBlobs = require('@netlify/blobs'); } catch (_) { netlifyBlobs = null; }
+
+const COOLDOWN_MINUTES = Number(process.env.NOTIFY_COOLDOWN_MINUTES || '180'); // default 3h
+
+async function getLastNotifiedTs(key) {
+  const now = Date.now();
+  const k = `notify:${key}`;
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore('status-notify');
+      const val = await store.get(k, { type: 'text' });
+      const ts = val ? Number(val) : 0;
+      return Number.isFinite(ts) ? ts : 0;
+    }
+  } catch (_) {}
+  globalThis.__NOTIFY_LAST__ = globalThis.__NOTIFY_LAST__ || {};
+  return globalThis.__NOTIFY_LAST__[k] || 0;
+}
+
+async function setLastNotifiedTs(key, ts) {
+  const k = `notify:${key}`;
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore('status-notify');
+      await store.set(k, String(ts));
+      return;
+    }
+  } catch (_) {}
+  globalThis.__NOTIFY_LAST__ = globalThis.__NOTIFY_LAST__ || {};
+  globalThis.__NOTIFY_LAST__[k] = ts;
+}
 
 function getJson(u) {
   return new Promise((resolve, reject) => {
@@ -107,11 +139,18 @@ exports.handler = async () => {
       if (current.state === 'incident' && prev.state !== 'incident') {
         const startedAt = current.startedAt || new Date().toISOString();
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
-        const started = new Date(startedAt).toLocaleString();
-        const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
-        const title = current.title || 'Incident detected';
-        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+        // Cooldown-based dedupe across cold starts
+        const lastTs = await getLastNotifiedTs(svc.name);
+        const nowTs = Date.now();
+        const withinCooldown = lastTs && (nowTs - lastTs) < COOLDOWN_MINUTES * 60 * 1000;
+        if (!withinCooldown) {
+          const started = new Date(startedAt).toLocaleString();
+          const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+          const title = current.title || 'Incident detected';
+          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+          await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+          await setLastNotifiedTs(svc.name, nowTs);
+        }
         continue;
       }
 
