@@ -28,6 +28,7 @@ Normalized local endpoints (recommended)
 ----------------------------------------
 Use these endpoints so the dashboard shows consistent, real-time status:
 - Apple App Store: /api/apple/status
+- Apple Game Center: /api/apple/game-center-status
 - Google Play Store: /api/google/play-status
 - Google Cloud (AdMob infra): /api/google/cloud-status
 - Facebook/Meta: /api/facebook/status

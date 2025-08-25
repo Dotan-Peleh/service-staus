@@ -51,6 +51,28 @@ exports.handler = async (event, context) => {
       return json(200, hasIncident ? { state: 'incident', severity: 'minor', title: 'Apple App Store incident', detail } : { state: 'operational' });
     }
 
+    if (path === '/api/apple/game-center-status') {
+      // Apple Game Center status via Apple System Status
+      let body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.json');
+      let data;
+      try { data = JSON.parse(body); } catch {
+        body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.js');
+        const start = body.indexOf('{'); const end = body.lastIndexOf('}');
+        if (start >= 0 && end > start) data = JSON.parse(body.slice(start, end + 1));
+      }
+      if (!data || !Array.isArray(data.services)) return json(502, { state: 'unknown' });
+      const target = new Set(['game center']);
+      let hasIncident = false; let detail = '';
+      for (const svc of data.services) {
+        const name = String(svc.serviceName || '').toLowerCase();
+        if (!target.has(name)) continue;
+        const events = Array.isArray(svc.events) ? svc.events : [];
+        const active = events.find(e => !e.endDate || (e.eventStatus && String(e.eventStatus).toLowerCase() !== 'resolved'));
+        if (active) { hasIncident = true; detail = active.message || active.userFacingStatus || active.eventStatus || ''; break; }
+      }
+      return json(200, hasIncident ? { state: 'incident', severity: 'minor', title: 'Apple Game Center incident', detail } : { state: 'operational' });
+    }
+
     if (path === '/api/google/play-status') {
       const body = await fetchText('https://status.play.google.com/');
       const plain = body.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
