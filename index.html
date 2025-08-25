@@ -1064,24 +1064,9 @@
         }
 
         async function notifySlack(service, details) {
-            try {
-                const enabledResp = await fetch('/api/notify/enabled', { cache: 'no-store' });
-                const { enabled } = enabledResp.ok ? await enabledResp.json() : { enabled: false };
-                if (!enabled) return;
-                await fetch('/api/notify/slack', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        service: service.name,
-                        severity: details.severity,
-                        title: details.title,
-                        eta: details.eta,
-                        statusUrl: service.statusUrl
-                    })
-                });
-            } catch (_) {
-                // ignore client-side errors
-            }
+            // Disabled client-side Slack notifications to avoid alerts on page visits.
+            // Notifications are sent by backend monitors only.
+            return;
         }
 
         function setupEventListeners() {
