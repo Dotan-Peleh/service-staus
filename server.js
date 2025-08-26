@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const url = require('url');
 const { URLSearchParams } = require('url');
+const utils = require('./lib/status-utils');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5173;
 const PUBLIC_DIR = __dirname;
@@ -191,14 +192,7 @@ const monitorLast = new Map(); // name -> { state, severity?, startedAt? }
 const notifyLast = new Map(); // name -> last notified timestamp (ms)
 const COOLDOWN_MINUTES = Number(process.env.NOTIFY_COOLDOWN_MINUTES || '180');
 
-function fetchJson(u) {
-  return new Promise((resolve, reject) => {
-    const lib = u.startsWith('http:') ? http : https;
-    lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
-      const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
-    }).on('error', reject);
-  });
-}
+function fetchJson(u) { return utils.fetchJson(u); }
 
 function normalizeFromLocal(data) {
   if (data && typeof data.state === 'string') {
@@ -825,14 +819,7 @@ function postForm(target, form, token, cb) {
   req.end(form.toString());
 }
 
-function formatSlackMessage(p) {
-  const severityEmoji = p.severity === 'critical' ? ':red_circle:' : ':large_yellow_circle:';
-  const title = p.title || 'Service Incident';
-  const name = p.service || 'Service';
-  const eta = p.eta ? `\nPlanned fix: ${new Date(p.eta).toLocaleString()}` : '';
-  const link = p.statusUrl ? `\nStatus: ${p.statusUrl}` : '';
-  return `${severityEmoji} ${name}: ${title}${eta}${link}`;
-}
+function formatSlackMessage(p) { return utils.formatSlackMessage(p); }
 
 function checkHtmlStatus(req, res) {
   const parsed = url.parse(req.url, true);
@@ -844,60 +831,15 @@ function checkHtmlStatus(req, res) {
   } catch {
     return send(res, 400, 'Invalid url');
   }
-  const lib = targetUrl.protocol === 'http:' ? http : https;
-  const options = {
-    method: 'GET',
-    headers: {
-      'User-Agent': 'ServiceStatusDashboard/1.0',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    },
-  };
-  const reqUp = lib.request(targetUrl, options, (resp) => {
-    const chunks = [];
-    resp.on('data', (c) => chunks.push(c));
-    resp.on('end', () => {
-      const body = Buffer.concat(chunks).toString('utf8');
-      const plain = body
-        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      const text = plain.toLowerCase();
-      // Simple heuristics (expanded)
-      const hasAllOperational = /all systems operational|all services operational|all services (are|now) (available|online)|no incidents reported/i.test(plain) || /operational\s*$/.test(text);
-      const hasMajor = /(major outage|critical outage|critical incident|severe outage|service (outage|down))/i.test(plain);
-      const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|scheduled maintenance)/i.test(plain);
-
-      let result;
-      if (hasMajor) {
-        result = { state: 'incident', severity: 'critical', title: 'Detected outage from status page', eta: null };
-      } else if (hasMinor) {
-        result = { state: 'incident', severity: 'minor', title: 'Detected degraded service from status page', eta: null };
-      } else if (hasAllOperational || /operational/.test(text)) {
-        result = { state: 'operational' };
-      } else {
-        result = { state: 'unknown' };
-      }
-
-      // Extract a brief human-readable detail sentence when we detect incident
-      if (result.state === 'incident') {
-        const sentences = plain.split(/(?<=[.!?])\s+/).slice(0, 50);
-        const idx = sentences.findIndex(s => /outage|disruption|degrad|incident|maintenance|unavail/i.test(s));
-        if (idx >= 0) {
-          const snippet = sentences[idx].trim().slice(0, 240);
-          result.detail = snippet;
-        }
-      }
+  utils.analyzeHtmlFromUrl(targetUrl.href)
+    .then((result) => {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify(result));
+    })
+    .catch((err) => {
+      console.error('HTML check error', targetUrl.href, err && err.code, err && err.message);
+      send(res, 502, 'Upstream error');
     });
-  });
-  reqUp.on('error', (err) => {
-    console.error('HTML check error', targetUrl.href, err && err.code, err && err.message);
-    send(res, 502, 'Upstream error');
-  });
-  reqUp.end();
 }
 
 

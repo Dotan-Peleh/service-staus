@@ -2,6 +2,7 @@
 
 const http = require('http');
 const https = require('https');
+const utils = require('../../lib/status-utils');
 let netlifyBlobs = null;
 try { netlifyBlobs = require('@netlify/blobs'); } catch (_) { netlifyBlobs = null; }
 
@@ -35,14 +36,7 @@ async function setLastNotifiedTs(key, ts) {
   globalThis.__NOTIFY_LAST__[k] = ts;
 }
 
-function getJson(u) {
-  return new Promise((resolve, reject) => {
-    const lib = u.startsWith('http:') ? http : https;
-    lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json' } }, (r) => {
-      const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
-    }).on('error', reject);
-  });
-}
+function getJson(u) { return utils.fetchJson(u); }
 
 function normalizeFromLocal(data) {
   if (data && typeof data.state === 'string') {
@@ -51,29 +45,7 @@ function normalizeFromLocal(data) {
   return { state: 'unknown' };
 }
 
-function normalizeFromStatuspage(summary) {
-  try {
-    if (summary && (Array.isArray(summary.incidents) || Array.isArray(summary.scheduled_maintenances))) {
-      const active = (summary.incidents || []).find(i => i.status !== 'resolved');
-      if (active) {
-        const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
-        const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
-        const startedAt = active.started_at || active.created_at || null;
-        return { state: 'incident', severity, title: active.name || 'Service Incident', startedAt };
-      }
-      return { state: 'operational' };
-    }
-  } catch (_) {}
-  try {
-    if (summary && summary.status && typeof summary.status.indicator === 'string') {
-      const ind = String(summary.status.indicator).toLowerCase();
-      if (ind === 'none') return { state: 'operational' };
-      if (ind === 'minor') return { state: 'incident', severity: 'minor', title: summary.status.description || 'Service Incident' };
-      if (ind === 'major' || ind === 'critical') return { state: 'incident', severity: 'critical', title: summary.status.description || 'Service Incident' };
-    }
-  } catch (_) {}
-  return { state: 'unknown' };
-}
+function normalizeFromStatuspage(summary) { return utils.parseStatuspageSummary(summary); }
 
 function notifySlackBackground(message) {
   const webhook = process.env.SLACK_WEBHOOK_URL || '';
