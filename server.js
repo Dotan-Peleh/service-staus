@@ -192,6 +192,15 @@ const monitorLast = new Map(); // name -> { state, severity?, startedAt? }
 const notifyLast = new Map(); // name -> last notified timestamp (ms)
 const COOLDOWN_MINUTES = Number(process.env.NOTIFY_COOLDOWN_MINUTES || '180');
 
+// Persisted incident state for local server run (in-memory only)
+const persistedStateByKey = new Map(); // dedupeKey -> { state, startedAt }
+
+function getDedupeKey(svc) {
+  let base = (svc && svc.statusUrl) ? String(svc.statusUrl) : String(svc && svc.name || '');
+  if (base.endsWith('/')) base = base.slice(0, -1);
+  return base.toLowerCase();
+}
+
 function fetchJson(u) { return utils.fetchJson(u); }
 
 function normalizeFromLocal(data) {
@@ -246,38 +255,40 @@ async function pollAllServicesOnce() {
       const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
       const prev = monitorLast.get(svc.name) || { state: 'unknown', startedAt: null };
 
-      // Transition into incident
-      if (current.state === 'incident' && prev.state !== 'incident') {
+      const dedupeKey = getDedupeKey(svc);
+      const persisted = persistedStateByKey.get(dedupeKey) || { state: 'unknown', startedAt: null };
+
+      // Transition into incident (guarded by persisted state to avoid repeats)
+      if (current.state === 'incident' && persisted.state !== 'incident') {
         const startedAt = current.startedAt || new Date().toISOString();
         monitorLast.set(svc.name, { state: 'incident', severity: current.severity || 'minor', startedAt });
-        // Cooldown dedupe for local monitor
-        const lastTs = notifyLast.get(svc.name) || 0;
-        const nowTs = Date.now();
-        const withinCooldown = lastTs && (nowTs - lastTs) < COOLDOWN_MINUTES * 60 * 1000;
-        if (!withinCooldown) {
-          const started = new Date(startedAt).toLocaleString();
-          const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
-          const title = current.title || 'Incident detected';
-          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-          notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
-          notifyLast.set(svc.name, nowTs);
-        }
+        const started = new Date(startedAt).toLocaleString();
+        const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+        const title = current.title || 'Incident detected';
+        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+        notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+        persistedStateByKey.set(dedupeKey, { state: 'incident', startedAt });
         continue;
       }
 
-      // Transition back to operational
-      if (current.state === 'operational' && prev.state === 'incident') {
+      // Transition back to operational (persisted incident → operational)
+      if (current.state === 'operational' && persisted.state === 'incident') {
         const ended = new Date().toLocaleString();
-        const started = prev.startedAt ? new Date(prev.startedAt).toLocaleString() : 'Unknown';
+        const started = (persisted.startedAt ? new Date(persisted.startedAt) : (prev.startedAt ? new Date(prev.startedAt) : null));
+        const startedStr = started ? started.toLocaleString() : 'Unknown';
         const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${started}\nResolved: ${ended}${link}`);
+        notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
         monitorLast.set(svc.name, { state: 'operational', startedAt: null });
+        persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null });
         continue;
       }
 
       // Keep state in sync when not changing
       if (prev.state !== current.state) {
         monitorLast.set(svc.name, { state: current.state, startedAt: null });
+      }
+      if (persisted.state === 'unknown' && current.state === 'operational') {
+        persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null });
       }
     } catch (_) {
       // ignore errors per service to avoid blocking the loop

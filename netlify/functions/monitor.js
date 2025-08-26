@@ -36,6 +36,40 @@ async function setLastNotifiedTs(key, ts) {
   globalThis.__NOTIFY_LAST__[k] = ts;
 }
 
+// Persisted incident state to ensure we alert only once per continuous incident
+async function getPersistedState(key) {
+  const k = `state:${key}`;
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore('status-notify');
+      const val = await store.get(k, { type: 'text' });
+      if (!val) return { state: 'unknown', startedAt: null };
+      try { return JSON.parse(val); } catch (_) { return { state: 'unknown', startedAt: null }; }
+    }
+  } catch (_) {}
+  globalThis.__NOTIFY_STATE__ = globalThis.__NOTIFY_STATE__ || {};
+  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null };
+}
+
+async function setPersistedState(key, value) {
+  const k = `state:${key}`;
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore('status-notify');
+      await store.set(k, JSON.stringify(value));
+      return;
+    }
+  } catch (_) {}
+  globalThis.__NOTIFY_STATE__ = globalThis.__NOTIFY_STATE__ || {};
+  globalThis.__NOTIFY_STATE__[k] = value;
+}
+
+function getDedupeKey(svc) {
+  let base = (svc && svc.statusUrl) ? String(svc.statusUrl) : String(svc && svc.name || '');
+  if (base.endsWith('/')) base = base.slice(0, -1);
+  return base.toLowerCase();
+}
+
 function getJson(u) { return utils.fetchJson(u); }
 
 function normalizeFromLocal(data) {
@@ -107,36 +141,40 @@ exports.handler = async () => {
       const raw = await getJson(svc.url);
       const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
       const prev = last[svc.name] || { state: 'unknown', startedAt: null };
+      const dedupeKey = getDedupeKey(svc);
+      const persisted = await getPersistedState(dedupeKey);
 
-      if (current.state === 'incident' && prev.state !== 'incident') {
+      // Entering incident (persisted state says we were not in incident)
+      if (current.state === 'incident' && persisted.state !== 'incident') {
         const startedAt = current.startedAt || new Date().toISOString();
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
-        // Cooldown-based dedupe across cold starts
-        const lastTs = await getLastNotifiedTs(svc.name);
-        const nowTs = Date.now();
-        const withinCooldown = lastTs && (nowTs - lastTs) < COOLDOWN_MINUTES * 60 * 1000;
-        if (!withinCooldown) {
-          const started = new Date(startedAt).toLocaleString();
-          const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
-          const title = current.title || 'Incident detected';
-          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-          await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
-          await setLastNotifiedTs(svc.name, nowTs);
-        }
-        continue;
-      }
-
-      if (current.state === 'operational' && prev.state === 'incident') {
-        const ended = new Date().toLocaleString();
-        const started = prev.startedAt ? new Date(prev.startedAt).toLocaleString() : 'Unknown';
+        const started = new Date(startedAt).toLocaleString();
+        const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+        const title = current.title || 'Incident detected';
         const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${started}\nResolved: ${ended}${link}`);
-        last[svc.name] = { state: 'operational', startedAt: null };
+        await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+        await setPersistedState(dedupeKey, { state: 'incident', startedAt });
         continue;
       }
 
+      // Returning to operational (persisted incident → operational)
+      if (current.state === 'operational' && persisted.state === 'incident') {
+        const ended = new Date().toLocaleString();
+        const started = (persisted.startedAt ? new Date(persisted.startedAt) : (prev.startedAt ? new Date(prev.startedAt) : null));
+        const startedStr = started ? started.toLocaleString() : 'Unknown';
+        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+        await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
+        last[svc.name] = { state: 'operational', startedAt: null };
+        await setPersistedState(dedupeKey, { state: 'operational', startedAt: null });
+        continue;
+      }
+
+      // Keep in-memory state in sync; also normalize persisted "unknown" → "operational"
       if (prev.state !== current.state) {
         last[svc.name] = { state: current.state, startedAt: null };
+      }
+      if (persisted.state === 'unknown' && current.state === 'operational') {
+        await setPersistedState(dedupeKey, { state: 'operational', startedAt: null });
       }
     } catch (_) {
       // ignore per-service errors
