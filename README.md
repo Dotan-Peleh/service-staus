@@ -47,6 +47,7 @@ Unity status (Statuspal)
 - We detect Unity incidents by scraping the public page via an HTML heuristic endpoint:
   - `/api/check-html?url=https://status.unity.com/`
 - Frontend entries for `Unity LevelPlay`, `Unity Ads`, and `Unity Cloud Services` use the HTML checker and share the same `statusUrl`.
+ - Notifications are deduped by `statusUrl`, so Unity sends only one alert per continuous incident (and one recovery message).
 
 Backend monitoring
 ------------------
@@ -116,9 +117,10 @@ Notifications behavior
 ----------------------
 - Client-side Slack notifications are disabled; visiting/refreshing the dashboard will not send alerts.
 - Alerts are emitted only on state transitions detected by the backend monitor (local or Netlify scheduled function).
- - To prevent repeated alerts after cold starts, a cooldown suppresses duplicate notifications for the same service.
-   - Configure minutes via `NOTIFY_COOLDOWN_MINUTES` (default 180 minutes).
-   - Netlify uses Blobs storage (`status-notify` store) to persist last-notified timestamps across function instances.
+- Once-per-incident dedupe: Each service alerts once when an incident starts and once when it resolves.
+  - Dedupe key is the `statusUrl` (normalized). Multiple cards pointing to the same page (e.g., Unity) produce a single alert per continuous incident.
+  - Netlify persists incident state in Blobs (`status-notify` store) to avoid repeats across cold starts. The local server keeps state in memory during the process lifetime.
+  - The previous cooldown-based suppression (`NOTIFY_COOLDOWN_MINUTES`) is no longer used for backend monitor notifications.
 
 Troubleshooting
 ---------------
