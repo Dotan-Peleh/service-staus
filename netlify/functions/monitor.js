@@ -7,6 +7,7 @@ let netlifyBlobs = null;
 try { netlifyBlobs = require('@netlify/blobs'); } catch (_) { netlifyBlobs = null; }
 
 const COOLDOWN_MINUTES = Number(process.env.NOTIFY_COOLDOWN_MINUTES || '180'); // default 3h
+const RESET_UNKNOWN_MINUTES = Number(process.env.RESET_UNKNOWN_MINUTES || '60'); // reset incident after 60m of non-incident/unknown
 
 async function getLastNotifiedTs(key) {
   const now = Date.now();
@@ -43,12 +44,21 @@ async function getPersistedState(key) {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
       const store = netlifyBlobs.getStore('status-notify');
       const val = await store.get(k, { type: 'text' });
-      if (!val) return { state: 'unknown', startedAt: null };
-      try { return JSON.parse(val); } catch (_) { return { state: 'unknown', startedAt: null }; }
+      if (!val) return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
+      try {
+        const parsed = JSON.parse(val);
+        return {
+          state: parsed.state || 'unknown',
+          startedAt: parsed.startedAt || null,
+          lastNonIncidentTs: Number(parsed.lastNonIncidentTs || 0),
+        };
+      } catch (_) {
+        return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
+      }
     }
   } catch (_) {}
   globalThis.__NOTIFY_STATE__ = globalThis.__NOTIFY_STATE__ || {};
-  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null };
+  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
 }
 
 async function setPersistedState(key, value) {
@@ -136,6 +146,7 @@ exports.handler = async () => {
   globalThis.__MONITOR_LAST__ = globalThis.__MONITOR_LAST__ || {};
   const last = globalThis.__MONITOR_LAST__;
 
+  const sentThisRun = new Set();
   for (const svc of services) {
     try {
       const raw = await getJson(svc.url);
@@ -143,17 +154,21 @@ exports.handler = async () => {
       const prev = last[svc.name] || { state: 'unknown', startedAt: null };
       const dedupeKey = getDedupeKey(svc);
       const persisted = await getPersistedState(dedupeKey);
+      const nowTs = Date.now();
 
       // Entering incident (persisted state says we were not in incident)
       if (current.state === 'incident' && persisted.state !== 'incident') {
         const startedAt = current.startedAt || new Date().toISOString();
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
-        const started = new Date(startedAt).toLocaleString();
-        const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
-        const title = current.title || 'Incident detected';
-        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
-        await setPersistedState(dedupeKey, { state: 'incident', startedAt });
+        if (!sentThisRun.has(dedupeKey)) {
+          const started = new Date(startedAt).toLocaleString();
+          const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+          const title = current.title || 'Incident detected';
+          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+          await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+          sentThisRun.add(dedupeKey);
+        }
+        await setPersistedState(dedupeKey, { state: 'incident', startedAt, lastNonIncidentTs: 0 });
         continue;
       }
 
@@ -165,7 +180,7 @@ exports.handler = async () => {
         const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
         await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
         last[svc.name] = { state: 'operational', startedAt: null };
-        await setPersistedState(dedupeKey, { state: 'operational', startedAt: null });
+        await setPersistedState(dedupeKey, { state: 'operational', startedAt: null, lastNonIncidentTs: nowTs });
         continue;
       }
 
@@ -173,8 +188,21 @@ exports.handler = async () => {
       if (prev.state !== current.state) {
         last[svc.name] = { state: current.state, startedAt: null };
       }
-      if (persisted.state === 'unknown' && current.state === 'operational') {
-        await setPersistedState(dedupeKey, { state: 'operational', startedAt: null });
+      // Track last time we observed non-incident (operational/unknown)
+      if (current.state !== 'incident') {
+        const lastNonIncidentTs = nowTs;
+        await setPersistedState(dedupeKey, {
+          state: persisted.state,
+          startedAt: persisted.startedAt || null,
+          lastNonIncidentTs,
+        });
+      }
+      // Grace reset: if we stayed away from incident for long, reset persisted state
+      if (persisted.state === 'incident' && persisted.lastNonIncidentTs) {
+        const elapsed = nowTs - Number(persisted.lastNonIncidentTs || 0);
+        if (elapsed >= RESET_UNKNOWN_MINUTES * 60 * 1000) {
+          await setPersistedState(dedupeKey, { state: 'operational', startedAt: null, lastNonIncidentTs: nowTs });
+        }
       }
     } catch (_) {
       // ignore per-service errors

@@ -194,6 +194,7 @@ const COOLDOWN_MINUTES = Number(process.env.NOTIFY_COOLDOWN_MINUTES || '180');
 
 // Persisted incident state for local server run (in-memory only)
 const persistedStateByKey = new Map(); // dedupeKey -> { state, startedAt }
+const RESET_UNKNOWN_MINUTES = Number(process.env.RESET_UNKNOWN_MINUTES || '60');
 
 function getDedupeKey(svc) {
   let base = (svc && svc.statusUrl) ? String(svc.statusUrl) : String(svc && svc.name || '');
@@ -256,7 +257,7 @@ async function pollAllServicesOnce() {
       const prev = monitorLast.get(svc.name) || { state: 'unknown', startedAt: null };
 
       const dedupeKey = getDedupeKey(svc);
-      const persisted = persistedStateByKey.get(dedupeKey) || { state: 'unknown', startedAt: null };
+      const persisted = persistedStateByKey.get(dedupeKey) || { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
 
       // Transition into incident (guarded by persisted state to avoid repeats)
       if (current.state === 'incident' && persisted.state !== 'incident') {
@@ -267,7 +268,7 @@ async function pollAllServicesOnce() {
         const title = current.title || 'Incident detected';
         const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
         notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
-        persistedStateByKey.set(dedupeKey, { state: 'incident', startedAt });
+        persistedStateByKey.set(dedupeKey, { state: 'incident', startedAt, lastNonIncidentTs: 0 });
         continue;
       }
 
@@ -279,7 +280,7 @@ async function pollAllServicesOnce() {
         const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
         notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
         monitorLast.set(svc.name, { state: 'operational', startedAt: null });
-        persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null });
+        persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null, lastNonIncidentTs: Date.now() });
         continue;
       }
 
@@ -287,8 +288,19 @@ async function pollAllServicesOnce() {
       if (prev.state !== current.state) {
         monitorLast.set(svc.name, { state: current.state, startedAt: null });
       }
-      if (persisted.state === 'unknown' && current.state === 'operational') {
-        persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null });
+      if (current.state !== 'incident') {
+        const nowTs = Date.now();
+        persistedStateByKey.set(dedupeKey, {
+          state: persisted.state,
+          startedAt: persisted.startedAt || null,
+          lastNonIncidentTs: nowTs,
+        });
+        if (persisted.state === 'incident' && persisted.lastNonIncidentTs) {
+          const elapsed = nowTs - Number(persisted.lastNonIncidentTs || 0);
+          if (elapsed >= RESET_UNKNOWN_MINUTES * 60 * 1000) {
+            persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null, lastNonIncidentTs: nowTs });
+          }
+        }
       }
     } catch (_) {
       // ignore errors per service to avoid blocking the loop
