@@ -1,0 +1,12 @@
+{
+  "name": "service-staus",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mobile Services Status Dashboard",
+  "license": "MIT",
+  "dependencies": {
+    "@netlify/blobs": "^6.5.0"
+  }
+}
+
+
