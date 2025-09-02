@@ -175,7 +175,7 @@ exports.handler = async (event, context) => {
         const text = plain.toLowerCase();
         const allOk = /all systems operational|all systems normal|no incidents reported|no known issues|slack is (operating|up and running) (normally|normal)?/i.test(plain) || /operational\s*$/.test(text);
         const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
-        const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|investigating|identified|monitoring)/i.test(plain);
+        const hasMinor = /(partial outage|degraded performance|degradation|incident|investigating|identified|monitoring)/i.test(plain);
         const snippet = (()=>{ const s=plain.split(/(?<=[.!?])\s+/); const i=s.findIndex(t=>/outage|incident|degrad|disruption|unavail|maintenance|investigating|identified|monitoring|resolved|restored/i.test(t)); return i>=0?s[i].trim().slice(0,240):''; })();
         if (allOk) return json(200, { state: 'operational' });
         if (hasCritical) return json(200, { state: 'incident', severity: 'critical', title: snippet || 'Detected outage from Slack Status' });
