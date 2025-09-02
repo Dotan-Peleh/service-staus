@@ -2,6 +2,7 @@
 
 const http = require('http');
 const https = require('https');
+const utils = require('../../lib/status-utils');
 
 function json(status, obj) {
   return {
@@ -407,7 +408,7 @@ exports.handler = async (event, context) => {
       return { statusCode: resp.statusCode, headers: { 'Content-Type': resp.headers['content-type'] || 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: resp.body };
     }
 
-    // HTML heuristic checker for non-API status pages
+    // HTML heuristic checker for non-API status pages (shared logic)
     if (path.startsWith('/api/check-html')) {
       const params = event.queryStringParameters || {};
       let urlParam = params.url;
@@ -416,19 +417,8 @@ exports.handler = async (event, context) => {
         if (m) urlParam = decodeURIComponent(m[1]);
       }
       if (!urlParam) return json(400, { error: 'Missing url' });
-      const u = urlParam;
       try {
-        const body = await fetchText(u);
-        const plain = body.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-        const text = plain.toLowerCase();
-        const hasAllOperational = /all systems operational|all services operational|all services (are|now) (available|online)|no incidents reported/i.test(plain) || /operational\s*$/.test(text);
-        const hasMajor = /(major outage|critical outage|critical incident|severe outage|service (outage|down))/i.test(plain);
-        const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|scheduled maintenance)/i.test(plain);
-        let result;
-        if (hasMajor) result = { state: 'incident', severity: 'critical', title: 'Detected outage from status page', eta: null };
-        else if (hasMinor) result = { state: 'incident', severity: 'minor', title: 'Detected degraded service from status page', eta: null };
-        else if (hasAllOperational || /operational/.test(text)) result = { state: 'operational' };
-        else result = { state: 'unknown' };
+        const result = await utils.analyzeHtmlFromUrl(urlParam);
         return json(200, result);
       } catch {
         return json(502, { state: 'unknown' });
