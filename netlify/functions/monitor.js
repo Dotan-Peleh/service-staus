@@ -223,6 +223,7 @@ exports.handler = async () => {
   return { statusCode: 200, body: 'ok' };
 };
 
-exports.config = { schedule: '*/5 * * * *' };
+// Netlify schedule disabled; use external scheduler (e.g., GCP) to invoke this function.
+// exports.config = { schedule: '*/5 * * * *' };
 
 
