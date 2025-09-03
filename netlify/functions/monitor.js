@@ -164,12 +164,17 @@ exports.handler = async () => {
         const startedAt = current.startedAt || persisted.startedAt || new Date().toISOString();
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
         if (persisted.lastNotifiedStartAt !== startedAt) {
+          // Cooldown guard in case persistence is unavailable
+          const lastTs = await getLastNotifiedTs(`${dedupeKey}:start`);
+          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
           const started = new Date(startedAt).toLocaleString();
           const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
           const title = current.title || 'Incident detected';
           const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
           await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+            await setLastNotifiedTs(`${dedupeKey}:start`, Date.now());
           await setPersistedState(dedupeKey, { state: 'incident', startedAt, lastNotifiedStartAt: startedAt, lastNotifiedResolveAt: null, lastNonIncidentTs: 0 });
+          }
         } else {
           await setPersistedState(dedupeKey, { state: 'incident', startedAt });
         }
@@ -179,12 +184,17 @@ exports.handler = async () => {
       // Returning to operational: notify once per incident
       if (current.state === 'operational') {
         if (persisted.state === 'incident' && persisted.startedAt && persisted.lastNotifiedResolveAt !== persisted.startedAt) {
-          const ended = new Date().toLocaleString();
-          const startedStr = new Date(persisted.startedAt).toLocaleString();
-          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-          await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
-          last[svc.name] = { state: 'operational', startedAt: null };
-          await setPersistedState(dedupeKey, { state: 'operational', startedAt: null, lastNotifiedResolveAt: persisted.startedAt, lastNonIncidentTs: nowTs });
+          // Cooldown guard for resolve
+          const lastTs = await getLastNotifiedTs(`${dedupeKey}:resolve`);
+          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
+            const ended = new Date().toLocaleString();
+            const startedStr = new Date(persisted.startedAt).toLocaleString();
+            const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+            await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
+            await setLastNotifiedTs(`${dedupeKey}:resolve`, Date.now());
+            last[svc.name] = { state: 'operational', startedAt: null };
+            await setPersistedState(dedupeKey, { state: 'operational', startedAt: null, lastNotifiedResolveAt: persisted.startedAt, lastNonIncidentTs: nowTs });
+          }
           continue;
         }
         // keep state without duplicate notification
