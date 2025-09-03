@@ -150,8 +150,12 @@ exports.handler = async () => {
     try {
       const raw = await getJson(svc.url);
       const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
+      // Strengthen dedupe: override key with incidentId when present
+      let dedupeKey = getDedupeKey(svc);
+      if (current && current.incidentId) {
+        dedupeKey = `${dedupeKey}#${String(current.incidentId).trim()}`;
+      }
       const prev = last[svc.name] || { state: 'unknown', startedAt: null };
-      const dedupeKey = getDedupeKey(svc);
       const persisted = await getPersistedState(dedupeKey);
       const nowTs = Date.now();
 

@@ -235,7 +235,8 @@ function normalizeFromStatuspage(summary) {
         const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
         const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
         const startedAt = active.started_at || active.created_at || null;
-        return { state: 'incident', severity, title: active.name || 'Service Incident', startedAt };
+        const incidentId = active.id || active.shortlink || active.url || null;
+        return { state: 'incident', severity, title: active.name || 'Service Incident', startedAt, incidentId };
       }
       return { state: 'operational' };
     }
@@ -272,7 +273,10 @@ async function pollAllServicesOnce() {
       const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
       const prev = monitorLast.get(svc.name) || { state: 'unknown', startedAt: null };
 
-      const dedupeKey = getDedupeKey(svc);
+      let dedupeKey = getDedupeKey(svc);
+      if (current && current.incidentId) {
+        dedupeKey = `${dedupeKey}#${String(current.incidentId).trim()}`;
+      }
       const persisted = getMonitorPersist(dedupeKey);
 
       // Incident handling with dedupe by startedAt
