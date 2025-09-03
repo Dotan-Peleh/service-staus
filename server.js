@@ -30,6 +30,25 @@ function updateStore(key, value) {
   saveStore();
 }
 
+// --- Persisted monitor state helpers (dedupe across restarts) ---
+function getMonitorPersist(key) {
+  try {
+    const root = statusStore.__monitor || {};
+    return root[key] || { state: 'unknown', startedAt: null, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, updatedAt: 0 };
+  } catch (_) {
+    return { state: 'unknown', startedAt: null, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, updatedAt: 0 };
+  }
+}
+
+function setMonitorPersist(key, valuePatch) {
+  try {
+    if (!statusStore.__monitor) statusStore.__monitor = {};
+    const current = getMonitorPersist(key);
+    statusStore.__monitor[key] = { ...current, ...valuePatch, updatedAt: Date.now() };
+    saveStore();
+  } catch (_) {}
+}
+
 function send(res, status, body, headers = {}) {
   const defaultHeaders = {
     'Content-Type': 'text/plain; charset=utf-8',
@@ -254,51 +273,52 @@ async function pollAllServicesOnce() {
       const prev = monitorLast.get(svc.name) || { state: 'unknown', startedAt: null };
 
       const dedupeKey = getDedupeKey(svc);
-      const persisted = persistedStateByKey.get(dedupeKey) || { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
+      const persisted = getMonitorPersist(dedupeKey);
 
-      // Transition into incident (guarded by persisted state to avoid repeats)
-      if (current.state === 'incident' && persisted.state !== 'incident') {
-        const startedAt = current.startedAt || new Date().toISOString();
+      // Incident handling with dedupe by startedAt
+      if (current.state === 'incident') {
+        const startedAt = current.startedAt || persisted.startedAt || new Date().toISOString();
         monitorLast.set(svc.name, { state: 'incident', severity: current.severity || 'minor', startedAt });
-        const started = new Date(startedAt).toLocaleString();
-        const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
-        const title = current.title || 'Incident detected';
-        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
-        persistedStateByKey.set(dedupeKey, { state: 'incident', startedAt, lastNonIncidentTs: 0 });
+
+        // Notify only once per incident startAt
+        if (persisted.lastNotifiedStartAt !== startedAt) {
+          const started = new Date(startedAt).toLocaleString();
+          const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+          const title = current.title || 'Incident detected';
+          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+          notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+          setMonitorPersist(dedupeKey, { state: 'incident', startedAt, lastNotifiedStartAt: startedAt, lastNotifiedResolveAt: null });
+        } else {
+          // Keep state up to date without notifying
+          setMonitorPersist(dedupeKey, { state: 'incident', startedAt });
+        }
         continue;
       }
 
-      // Transition back to operational (persisted incident → operational)
-      if (current.state === 'operational' && persisted.state === 'incident') {
-        const ended = new Date().toLocaleString();
-        const started = (persisted.startedAt ? new Date(persisted.startedAt) : (prev.startedAt ? new Date(prev.startedAt) : null));
-        const startedStr = started ? started.toLocaleString() : 'Unknown';
-        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
-        monitorLast.set(svc.name, { state: 'operational', startedAt: null });
-        persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null, lastNonIncidentTs: Date.now() });
+      // Resolution handling: notify once when transitioning from incident
+      if (current.state === 'operational') {
+        if (persisted.state === 'incident' && persisted.startedAt && persisted.lastNotifiedResolveAt !== persisted.startedAt) {
+          const ended = new Date().toLocaleString();
+          const startedStr = new Date(persisted.startedAt).toLocaleString();
+          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+          notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
+          monitorLast.set(svc.name, { state: 'operational', startedAt: null });
+          setMonitorPersist(dedupeKey, { state: 'operational', startedAt: null, lastNotifiedResolveAt: persisted.startedAt });
+          continue;
+        }
+        // Keep state current without duplicate notifications
+        if (prev.state !== 'operational') {
+          monitorLast.set(svc.name, { state: 'operational', startedAt: null });
+        }
+        setMonitorPersist(dedupeKey, { state: 'operational' });
         continue;
       }
 
-      // Keep state in sync when not changing
+      // Unknown or other states: update cache only
       if (prev.state !== current.state) {
         monitorLast.set(svc.name, { state: current.state, startedAt: null });
       }
-      if (current.state !== 'incident') {
-        const nowTs = Date.now();
-        persistedStateByKey.set(dedupeKey, {
-          state: persisted.state,
-          startedAt: persisted.startedAt || null,
-          lastNonIncidentTs: nowTs,
-        });
-        if (persisted.state === 'incident' && persisted.lastNonIncidentTs) {
-          const elapsed = nowTs - Number(persisted.lastNonIncidentTs || 0);
-          if (elapsed >= RESET_UNKNOWN_MINUTES * 60 * 1000) {
-            persistedStateByKey.set(dedupeKey, { state: 'operational', startedAt: null, lastNonIncidentTs: nowTs });
-          }
-        }
-      }
+      setMonitorPersist(dedupeKey, { state: current.state });
     } catch (_) {
       // ignore errors per service to avoid blocking the loop
     }

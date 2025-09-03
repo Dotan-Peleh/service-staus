@@ -8,5 +8,98 @@
     "state": "unknown",
     "source": "webhook-statuspage",
     "updatedAt": 1755703367164
+  },
+  "__monitor": {
+    "https://status.play.google.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914432489
+    },
+    "https://developer.apple.com/system-status": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914432880
+    },
+    "https://status.firebase.google.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914433472
+    },
+    "https://status.mixpanel.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914434461
+    },
+    "https://status.singular.net": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914434918
+    },
+    "https://status.sentry.io": {
+      "state": "incident",
+      "startedAt": "2025-09-03T15:15:00.000Z",
+      "lastNotifiedStartAt": "2025-09-03T15:15:00.000Z",
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914435342
+    },
+    "https://metastatus.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914435395
+    },
+    "https://status.cloud.google.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914435751
+    },
+    "https://status.mongodb.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914436216
+    },
+    "https://status.slack.com": {
+      "state": "unknown",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914436827
+    },
+    "https://www.notion-status.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914437201
+    },
+    "https://status.figma.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914437715
+    },
+    "https://jira-software.status.atlassian.com": {
+      "state": "operational",
+      "startedAt": null,
+      "lastNotifiedStartAt": null,
+      "lastNotifiedResolveAt": null,
+      "updatedAt": 1756914438152
+    }
   }
 }
