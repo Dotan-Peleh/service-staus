@@ -44,21 +44,23 @@ async function getPersistedState(key) {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
       const store = netlifyBlobs.getStore('status-notify');
       const val = await store.get(k, { type: 'text' });
-      if (!val) return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
+      if (!val) return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null };
       try {
         const parsed = JSON.parse(val);
         return {
           state: parsed.state || 'unknown',
           startedAt: parsed.startedAt || null,
           lastNonIncidentTs: Number(parsed.lastNonIncidentTs || 0),
+          lastNotifiedStartAt: parsed.lastNotifiedStartAt || null,
+          lastNotifiedResolveAt: parsed.lastNotifiedResolveAt || null,
         };
       } catch (_) {
-        return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
+        return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null };
       }
     }
   } catch (_) {}
   globalThis.__NOTIFY_STATE__ = globalThis.__NOTIFY_STATE__ || {};
-  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null, lastNonIncidentTs: 0 };
+  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null };
 }
 
 async function setPersistedState(key, value) {
@@ -130,11 +132,8 @@ exports.handler = async () => {
     { name: 'Mixpanel', type: 'local', url: `${base}/.netlify/functions/api/mixpanel/status`, statusUrl: 'https://status.mixpanel.com/' },
     { name: 'Singular', type: 'statuspage', url: 'https://status.singular.net/api/v2/summary.json', statusUrl: 'https://status.singular.net/' },
     { name: 'Sentry', type: 'statuspage', url: 'https://status.sentry.io/api/v2/summary.json', statusUrl: 'https://status.sentry.io/' },
-    { name: 'Unity LevelPlay', type: 'local', url: `${base}/.netlify/functions/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
     { name: 'Facebook Audience Network', type: 'local', url: `${base}/.netlify/functions/api/facebook/status`, statusUrl: 'https://metastatus.com/' },
     { name: 'Google AdMob', type: 'local', url: `${base}/.netlify/functions/api/google/cloud-status`, statusUrl: 'https://status.cloud.google.com/' },
-    { name: 'Unity Ads', type: 'local', url: `${base}/.netlify/functions/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
-    { name: 'Unity Cloud Services', type: 'local', url: `${base}/.netlify/functions/api/check-html?url=https://status.unity.com/`, statusUrl: 'https://status.unity.com/' },
     { name: 'Realm Database', type: 'statuspage', url: 'https://status.mongodb.com/api/v2/summary.json', statusUrl: 'https://status.mongodb.com/' },
     { name: 'Slack', type: 'local', url: `${base}/.netlify/functions/api/slack/status`, statusUrl: 'https://status.slack.com/' },
     { name: 'Notion', type: 'statuspage', url: 'https://www.notion-status.com/api/v2/summary.json', statusUrl: 'https://www.notion-status.com/' },
@@ -156,31 +155,39 @@ exports.handler = async () => {
       const persisted = await getPersistedState(dedupeKey);
       const nowTs = Date.now();
 
-      // Entering incident (persisted state says we were not in incident)
-      if (current.state === 'incident' && persisted.state !== 'incident') {
-        const startedAt = current.startedAt || new Date().toISOString();
+      // Entering or staying in incident: notify once per startedAt
+      if (current.state === 'incident') {
+        const startedAt = current.startedAt || persisted.startedAt || new Date().toISOString();
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
-        if (!sentThisRun.has(dedupeKey)) {
+        if (persisted.lastNotifiedStartAt !== startedAt) {
           const started = new Date(startedAt).toLocaleString();
           const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
           const title = current.title || 'Incident detected';
           const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
           await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
-          sentThisRun.add(dedupeKey);
+          await setPersistedState(dedupeKey, { state: 'incident', startedAt, lastNotifiedStartAt: startedAt, lastNotifiedResolveAt: null, lastNonIncidentTs: 0 });
+        } else {
+          await setPersistedState(dedupeKey, { state: 'incident', startedAt });
         }
-        await setPersistedState(dedupeKey, { state: 'incident', startedAt, lastNonIncidentTs: 0 });
         continue;
       }
 
-      // Returning to operational (persisted incident → operational)
-      if (current.state === 'operational' && persisted.state === 'incident') {
-        const ended = new Date().toLocaleString();
-        const started = (persisted.startedAt ? new Date(persisted.startedAt) : (prev.startedAt ? new Date(prev.startedAt) : null));
-        const startedStr = started ? started.toLocaleString() : 'Unknown';
-        const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-        await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
-        last[svc.name] = { state: 'operational', startedAt: null };
-        await setPersistedState(dedupeKey, { state: 'operational', startedAt: null, lastNonIncidentTs: nowTs });
+      // Returning to operational: notify once per incident
+      if (current.state === 'operational') {
+        if (persisted.state === 'incident' && persisted.startedAt && persisted.lastNotifiedResolveAt !== persisted.startedAt) {
+          const ended = new Date().toLocaleString();
+          const startedStr = new Date(persisted.startedAt).toLocaleString();
+          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+          await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
+          last[svc.name] = { state: 'operational', startedAt: null };
+          await setPersistedState(dedupeKey, { state: 'operational', startedAt: null, lastNotifiedResolveAt: persisted.startedAt, lastNonIncidentTs: nowTs });
+          continue;
+        }
+        // keep state without duplicate notification
+        if (prev.state !== 'operational') {
+          last[svc.name] = { state: 'operational', startedAt: null };
+        }
+        await setPersistedState(dedupeKey, { state: 'operational' });
         continue;
       }
 
