@@ -4,6 +4,35 @@ const http = require('http');
 const https = require('https');
 const utils = require('../../lib/status-utils');
 
+function httpGetFollow(rawUrl, headers = {}, maxRedirects = 5) {
+  return new Promise((resolve, reject) => {
+    let currentUrl;
+    try { currentUrl = new URL(rawUrl); } catch (e) { return reject(e); }
+    const doGet = (u, redirectsLeft) => {
+      const lib = u.protocol === 'http:' ? http : https;
+      const req = lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': '*/*', 'Accept-Encoding': 'identity', ...headers } }, (r) => {
+        const status = r.statusCode || 0;
+        const loc = r.headers.location;
+        if ([301, 302, 303, 307, 308].includes(status) && loc && redirectsLeft > 0) {
+          try {
+            const nextUrl = new URL(loc, u);
+            r.resume();
+            return doGet(nextUrl, redirectsLeft - 1);
+          } catch (e) {
+            r.resume();
+            return reject(e);
+          }
+        }
+        const chunks = [];
+        r.on('data', c => chunks.push(c));
+        r.on('end', () => resolve({ statusCode: status, headers: r.headers, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', reject);
+    };
+    doGet(currentUrl, maxRedirects);
+  });
+}
+
 function json(status, obj) {
   return {
     statusCode: status,
@@ -12,15 +41,14 @@ function json(status, obj) {
   };
 }
 
-function fetchText(url) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('http:') ? http : https;
-    lib.get(url, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': '*/*', 'Accept-Encoding': 'identity' } }, (r) => {
-      const b = [];
-      r.on('data', c => b.push(c));
-      r.on('end', () => resolve(Buffer.concat(b).toString('utf8')));
-    }).on('error', reject);
-  });
+async function fetchText(u) {
+  const resp = await httpGetFollow(u, { 'Accept': '*/*' });
+  return resp.body;
+}
+
+async function fetchJson(u) {
+  const resp = await httpGetFollow(u, { 'Accept': 'application/json' });
+  try { return JSON.parse(resp.body); } catch (e) { throw e; }
 }
 
 exports.handler = async (event, context) => {
@@ -143,14 +171,7 @@ exports.handler = async (event, context) => {
 
     if (path === '/api/slack/status') {
       try {
-        const getJson = (u) => new Promise((resolve, reject) => {
-          const lib = u.startsWith('http:') ? http : https;
-          lib.get(u, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json; charset=utf-8', 'Accept-Encoding': 'identity' } }, (r) => {
-            const b = []; r.on('data', c => b.push(c)); r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(b).toString('utf8'))); } catch(e){ reject(e); } });
-          }).on('error', reject);
-        });
-
-        const data = await getJson('https://status.slack.com/api/v2.0.0/current');
+        const data = await fetchJson('https://status.slack.com/api/v2.0.0/current');
         if (data && Array.isArray(data.active_incidents) && data.active_incidents.length > 0) {
           const inc = data.active_incidents[0];
           const title = inc.title || inc.name || 'Service Incident';
@@ -237,36 +258,18 @@ exports.handler = async (event, context) => {
     if (path === '/api/slack/debug') {
       try {
         const currentUrl = 'https://status.slack.com/api/v2.0.0/current';
-        const currentDiag = await new Promise((resolve) => {
-          const lib = currentUrl.startsWith('http:') ? http : https;
-          const req = lib.get(currentUrl, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'application/json', 'Accept-Encoding': 'identity' } }, (r) => {
-            const b = []; r.on('data', c => b.push(c)); r.on('end', () => {
-              const body = Buffer.concat(b).toString('utf8');
-              let parsed = null; let parseError = null;
-              try { parsed = JSON.parse(body); } catch (e) { parseError = String(e && e.message || 'parse_error'); }
-              resolve({ statusCode: r.statusCode || 0, bodySample: body.slice(0, 400), parsed, parseError });
-            });
-          });
-          req.on('error', (e) => resolve({ statusCode: 0, error: String(e && e.message || 'request_error') }));
-        });
+        const currentResp = await httpGetFollow(currentUrl, { 'Accept': 'application/json' });
+        let parsed = null; let parseError = null;
+        try { parsed = JSON.parse(currentResp.body); } catch (e) { parseError = String(e && e.message || 'parse_error'); }
 
         const htmlUrl = 'https://status.slack.com/';
-        const htmlDiag = await new Promise((resolve) => {
-          const lib = htmlUrl.startsWith('http:') ? http : https;
-          const req = lib.get(htmlUrl, { headers: { 'User-Agent': 'ServiceStatusDashboard/1.0', 'Accept': 'text/html', 'Accept-Encoding': 'identity' } }, (r) => {
-            const b = []; r.on('data', c => b.push(c)); r.on('end', () => {
-              const body = Buffer.concat(b).toString('utf8');
-              const plain = body.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-              const allOk = /all systems operational|all systems normal|no incidents reported|no known issues|slack is (operating|up and running) (normally|normal)?/i.test(plain);
-              const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
-              const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|investigating|identified|monitoring)/i.test(plain);
-              resolve({ statusCode: r.statusCode || 0, bodySample: plain.slice(0, 400), allOk, hasCritical, hasMinor });
-            });
-          });
-          req.on('error', (e) => resolve({ statusCode: 0, error: String(e && e.message || 'request_error') }));
-        });
+        const htmlResp = await httpGetFollow(htmlUrl, { 'Accept': 'text/html' });
+        const plain = htmlResp.body.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+        const allOk = /all systems operational|all systems normal|no incidents reported|no known issues|slack is (operating|up and running) (normally|normal)?/i.test(plain);
+        const hasCritical = /(major outage|critical outage|service (outage|down)|widespread disruption)/i.test(plain);
+        const hasMinor = /(partial outage|degraded performance|degradation|incident|maintenance|investigating|identified|monitoring)/i.test(plain);
 
-        return json(200, { current: currentDiag, html: htmlDiag });
+        return json(200, { current: { statusCode: currentResp.statusCode, bodySample: currentResp.body.slice(0,400), parsed, parseError }, html: { statusCode: htmlResp.statusCode, bodySample: plain.slice(0,400), allOk, hasCritical, hasMinor } });
       } catch {
         return json(502, { error: 'diag_error' });
       }
