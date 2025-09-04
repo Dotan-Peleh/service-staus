@@ -130,6 +130,39 @@ exports.handler = async (event) => {
       await notifySlackBackground(':mega: Monitor test ping — Netlify function is able to post to Slack');
       return { statusCode: 200, body: 'test-ok' };
     }
+    if (qs && (qs.debug === '1' || qs.debug === 'true')) {
+      const base = process.env.URL || 'https://3rd-party-services.netlify.app';
+      const services = [
+        { name: 'Google Play Store', type: 'local', url: `${base}/.netlify/functions/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
+        { name: 'Google Play Services', type: 'local', url: `${base}/.netlify/functions/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
+        { name: 'Apple App Store', type: 'local', url: `${base}/.netlify/functions/api/apple/status`, statusUrl: 'https://developer.apple.com/system-status/' },
+        { name: 'Firebase', type: 'local', url: `${base}/.netlify/functions/api/firebase/status`, statusUrl: 'https://status.firebase.google.com/' },
+        { name: 'Mixpanel', type: 'local', url: `${base}/.netlify/functions/api/mixpanel/status`, statusUrl: 'https://status.mixpanel.com/' },
+        { name: 'Singular', type: 'statuspage', url: 'https://status.singular.net/api/v2/summary.json', statusUrl: 'https://status.singular.net/' },
+        { name: 'Sentry', type: 'statuspage', url: 'https://status.sentry.io/api/v2/summary.json', statusUrl: 'https://status.sentry.io/' },
+        { name: 'Facebook Audience Network', type: 'local', url: `${base}/.netlify/functions/api/facebook/status`, statusUrl: 'https://metastatus.com/' },
+        { name: 'Google AdMob', type: 'local', url: `${base}/.netlify/functions/api/google/cloud-status`, statusUrl: 'https://status.cloud.google.com/' },
+        { name: 'Realm Database', type: 'statuspage', url: 'https://status.mongodb.com/api/v2/summary.json', statusUrl: 'https://status.mongodb.com/' },
+        { name: 'Slack', type: 'local', url: `${base}/.netlify/functions/api/slack/status`, statusUrl: 'https://status.slack.com/' },
+        { name: 'Notion', type: 'statuspage', url: 'https://www.notion-status.com/api/v2/summary.json', statusUrl: 'https://www.notion-status.com/' },
+        { name: 'Figma', type: 'statuspage', url: 'https://status.figma.com/api/v2/summary.json', statusUrl: 'https://status.figma.com/' },
+        { name: 'Jira Software', type: 'statuspage', url: 'https://jira-software.status.atlassian.com/api/v2/summary.json', statusUrl: 'https://jira-software.status.atlassian.com/' },
+      ];
+      const results = [];
+      for (const svc of services) {
+        try {
+          const raw = await getJson(svc.url);
+          const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
+          let key = getDedupeKey(svc);
+          if (current && current.incidentId) key = `${key}#${String(current.incidentId).trim()}`;
+          const persisted = await getPersistedState(key);
+          results.push({ name: svc.name, current, persisted });
+        } catch (e) {
+          results.push({ name: svc.name, error: String(e && e.message || 'error') });
+        }
+      }
+      return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(results) };
+    }
   } catch (_) {}
   const base = process.env.URL || 'https://3rd-party-services.netlify.app';
   const services = [
