@@ -122,7 +122,15 @@ function notifySlackBackground(message) {
   return Promise.resolve();
 }
 
-exports.handler = async () => {
+exports.handler = async (event) => {
+  // Optional test trigger: /.netlify/functions/monitor?test=1
+  try {
+    const qs = (event && event.queryStringParameters) || {};
+    if (qs && (qs.test === '1' || qs.test === 'true')) {
+      await notifySlackBackground(':mega: Monitor test ping — Netlify function is able to post to Slack');
+      return { statusCode: 200, body: 'test-ok' };
+    }
+  } catch (_) {}
   const base = process.env.URL || 'https://3rd-party-services.netlify.app';
   const services = [
     { name: 'Google Play Store', type: 'local', url: `${base}/.netlify/functions/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
