@@ -114,54 +114,41 @@ exports.handler = async (event, context) => {
     }
 
     if (path === '/api/mixpanel/status') {
-      // Normalize Mixpanel via Statuspage, follow redirects, avoid legend false-positives
+      // Mixpanel: use official Statuspage JSON only (no HTML fallback)
       try {
-        // Prefer summary.json
-        try {
-          const summary = await fetchJson('https://status.mixpanel.com/api/v2/summary.json');
-          if (summary) {
-            if (Array.isArray(summary.incidents) && summary.incidents.length > 0) {
-              const active = summary.incidents.find(i => i.status !== 'resolved');
-              if (active) {
-                const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
-                const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
-                return json(200, { state: 'incident', severity, title: active.name || 'Service Incident' });
-              }
-            }
-            if (Array.isArray(summary.scheduled_maintenances) && summary.scheduled_maintenances.length > 0) {
-              const maint = summary.scheduled_maintenances.find(m => m.status && m.status !== 'completed');
-              if (maint && (maint.status === 'in_progress' || maint.status === 'scheduled')) {
-                const impact = (maint.impact || maint.impact_override || 'minor').toLowerCase();
-                const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
-                const eta = maint.scheduled_until || maint.scheduled_end || maint.scheduled_for || null;
-                return json(200, { state: 'incident', severity, title: maint.name || 'Scheduled maintenance', eta });
-              }
+        // Use canonical domain directly
+        const summary = await fetchJson('https://www.mixpanelstatus.com/api/v2/summary.json');
+        if (summary) {
+          if (Array.isArray(summary.incidents) && summary.incidents.length > 0) {
+            const active = summary.incidents.find(i => i.status !== 'resolved');
+            if (active) {
+              const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
+              const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+              return json(200, { state: 'incident', severity, title: active.name || 'Service Incident' });
             }
           }
-        } catch (_) {}
+          if (Array.isArray(summary.scheduled_maintenances) && summary.scheduled_maintenances.length > 0) {
+            const maint = summary.scheduled_maintenances.find(m => m.status && m.status !== 'completed');
+            if (maint && (maint.status === 'in_progress' || maint.status === 'scheduled')) {
+              const impact = (maint.impact || maint.impact_override || 'minor').toLowerCase();
+              const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
+              const eta = maint.scheduled_until || maint.scheduled_end || maint.scheduled_for || null;
+              return json(200, { state: 'incident', severity, title: maint.name || 'Scheduled maintenance', eta });
+            }
+          }
+        }
+      } catch (_) {}
 
-        // Fallback to indicator
-        try {
-          const status = await fetchJson('https://status.mixpanel.com/api/v2/status.json');
-          const indicator = status && status.status && String(status.status.indicator || '').toLowerCase();
-          if (indicator === 'none') return json(200, { state: 'operational' });
-          if (indicator === 'minor') return json(200, { state: 'incident', severity: 'minor', title: status.status.description || 'Service Incident' });
-          if (indicator === 'major' || indicator === 'critical') return json(200, { state: 'incident', severity: 'critical', title: status.status.description || 'Service Incident' });
-        } catch (_) {}
+      try {
+        const status = await fetchJson('https://www.mixpanelstatus.com/api/v2/status.json');
+        const indicator = status && status.status && String(status.status.indicator || '').toLowerCase();
+        if (indicator === 'none') return json(200, { state: 'operational' });
+        if (indicator === 'minor') return json(200, { state: 'incident', severity: 'minor', title: status.status.description || 'Service Incident' });
+        if (indicator === 'major' || indicator === 'critical') return json(200, { state: 'incident', severity: 'critical', title: status.status.description || 'Service Incident' });
+      } catch (_) {}
 
-        // Last resort: HTML with stricter signals; ignore static legend words
-        const html = await fetchText('https://status.mixpanel.com/');
-        const plain = html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-        const allOk = /all systems operational|no incidents reported|no known issues/i.test(plain);
-        if (allOk) return json(200, { state: 'operational' });
-        const hasCritical = /(major outage|service (?:outage|down)|widespread disruption)/i.test(plain);
-        const hasMinor = /(degraded performance|degradation|incident|investigating|identified|monitoring|in progress|scheduled maintenance)/i.test(plain);
-        if (hasCritical) return json(200, { state: 'incident', severity: 'critical', title: 'Detected incident' });
-        if (hasMinor) return json(200, { state: 'incident', severity: 'minor', title: 'Detected incident' });
-        return json(200, { state: 'operational' });
-      } catch {
-        return json(200, { state: 'unknown' });
-      }
+      // If APIs unreachable, return unknown (avoid HTML-based false positives)
+      return json(200, { state: 'unknown' });
     }
 
     if (path === '/api/slack/status') {
