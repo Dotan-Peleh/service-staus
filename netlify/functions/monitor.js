@@ -224,7 +224,11 @@ exports.handler = async (event) => {
 
       // Returning to operational: notify once per incident
       if (current.state === 'operational') {
-        if (persisted.state === 'incident' && persisted.startedAt && persisted.lastNotifiedResolveAt !== persisted.startedAt) {
+        // Resolve if we previously notified a start for this incident and haven't notified resolve yet
+        const hasStarted = Boolean(persisted.startedAt);
+        const startWasNotified = persisted.lastNotifiedStartAt && (persisted.lastNotifiedStartAt === persisted.startedAt);
+        const resolveNotSent = persisted.lastNotifiedResolveAt !== persisted.startedAt;
+        if (hasStarted && startWasNotified && resolveNotSent) {
           // Cooldown guard for resolve
           const lastTs = await getLastNotifiedTs(`${dedupeKey}:resolve`);
           if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
