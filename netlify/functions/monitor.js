@@ -175,6 +175,18 @@ exports.handler = async (event) => {
     }
   } catch (_) {}
   const base = process.env.URL || 'https://3rd-party-services.netlify.app';
+
+  // Coalesce overlapping invocations: skip if a run occurred <60s ago
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
+      const lastRun = store ? await store.get('meta:lastRunAt', { type: 'text' }) : null;
+      const lastTs = lastRun ? Number(lastRun) : 0;
+      if (Number.isFinite(lastTs) && (Date.now() - lastTs) < 60 * 1000) {
+        return { statusCode: 200, body: 'ok-coalesced' };
+      }
+    }
+  } catch (_) {}
   const services = [
     { name: 'Google Play Store', type: 'local', url: `${base}/.netlify/functions/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
     { name: 'Google Play Services', type: 'local', url: `${base}/.netlify/functions/api/google/play-status`, statusUrl: 'https://status.play.google.com/' },
