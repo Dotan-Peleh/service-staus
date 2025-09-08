@@ -60,15 +60,25 @@ Service coverage
 
 - Unity services were removed from the dashboard and the background monitor.
 
-Backend monitoring
+-Backend monitoring
 ------------------
-- Netlify scheduled function (`netlify/functions/monitor.js`) runs every 5 minutes and polls all services above.
+- Production scheduling: We recommend using an external scheduler (e.g., GCP Cloud Scheduler) to invoke the monitor endpoint every 5 minutes.
+  - Target URL (required): `https://<site>/.netlify/functions/monitor`
+  - Example (GCP):
+    ```bash
+    gcloud scheduler jobs create http services-monitor \
+      --schedule="*/5 * * * *" \
+      --uri="https://<site>/.netlify/functions/monitor" \
+      --http-method=GET \
+      --time-zone="UTC"
+    ```
+- Netlify internal schedule: currently disabled in code to avoid double-runs when using GCP Scheduler. You can re-enable by uncommenting `exports.config = { schedule: '*/5 * * * *' }` in `netlify/functions/monitor.js`.
 - Slack notifications:
   - One message when a service enters incident (severity emoji + title + startedAt + status link).
   - One message when that incident resolves (“back to normal” + startedAt + resolved time + status link).
   - Deduped per service using a stable service key; the monitor stores `startedAt` and (when available) `incidentId` inside persisted state to avoid repeats even if incident IDs change or disappear.
   - Persistence uses Netlify Blobs (store: `status-notify`) so state survives function cold starts.
-- A cooldown guard prevents accidental repeats if persistence is temporarily unavailable.
+- A cooldown guard prevents accidental repeats; genuine changes (new incident, resolution) notify immediately.
 - Page visits do not send Slack messages; only the backend monitor posts.
 
 Monitor diagnostics
@@ -79,6 +89,10 @@ Monitor diagnostics
   - `https://<site>/.netlify/functions/monitor?test=1`
 - Inspect current vs persisted state to troubleshoot notifications:
   - `https://<site>/.netlify/functions/monitor?debug=1`
+ - Health (last successful run timestamp, ms since epoch):
+   - `https://<site>/.netlify/functions/monitor?health=1`
+   - Requires the function to write to Netlify Blobs (already included via `@netlify/blobs`). No extra UI enable step is needed.
+   - If `lastRunAt` stays 0, ensure your scheduler targets `/.netlify/functions/monitor` (not `/api/monitor`).
 
 Mixpanel status source
 ----------------------
