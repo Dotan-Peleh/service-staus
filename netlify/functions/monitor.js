@@ -298,7 +298,7 @@ exports.handler = async (event) => {
   return { statusCode: 200, body: 'ok' };
 };
 
-// Netlify schedule enabled to run the monitor automatically every 5 minutes
-exports.config = { schedule: '*/5 * * * *' };
+// Netlify schedule disabled; using external scheduler (e.g., GCP Cloud Scheduler)
+// exports.config = { schedule: '*/5 * * * *' };
 
 
