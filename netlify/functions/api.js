@@ -124,7 +124,9 @@ exports.handler = async (event, context) => {
             if (active) {
               const impact = (active.impact || active.impact_override || 'minor').toLowerCase();
               const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
-              return json(200, { state: 'incident', severity, title: active.name || 'Service Incident' });
+              const startedAt = active.started_at || active.created_at || null;
+              const incidentId = active.id || active.shortlink || active.url || null;
+              return json(200, { state: 'incident', severity, title: active.name || 'Service Incident', startedAt, incidentId });
             }
           }
           if (Array.isArray(summary.scheduled_maintenances) && summary.scheduled_maintenances.length > 0) {
@@ -133,7 +135,9 @@ exports.handler = async (event, context) => {
               const impact = (maint.impact || maint.impact_override || 'minor').toLowerCase();
               const severity = (impact === 'critical' || impact === 'major') ? 'critical' : 'minor';
               const eta = maint.scheduled_until || maint.scheduled_end || maint.scheduled_for || null;
-              return json(200, { state: 'incident', severity, title: maint.name || 'Scheduled maintenance', eta });
+              const startedAt = maint.scheduled_for || maint.created_at || null;
+              const incidentId = maint.id || maint.shortlink || maint.url || null;
+              return json(200, { state: 'incident', severity, title: maint.name || 'Scheduled maintenance', eta, startedAt, incidentId });
             }
           }
         }
