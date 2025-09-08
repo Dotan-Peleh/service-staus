@@ -329,9 +329,12 @@ async function pollAllServicesOnce() {
   }
 }
 
-// Start immediately then every 5 minutes
-pollAllServicesOnce();
-setInterval(pollAllServicesOnce, 5 * 60 * 1000);
+// Local background monitor is disabled by default to avoid duplicate Slack notifications
+// Enable explicitly by running with ENABLE_LOCAL_MONITOR=1
+if (process.env.ENABLE_LOCAL_MONITOR === '1') {
+  pollAllServicesOnce();
+  setInterval(pollAllServicesOnce, 5 * 60 * 1000);
+}
 
 function notifySlack(req, res) {
   if (req.method !== 'POST') return send(res, 405, 'Method Not Allowed');
