@@ -41,19 +41,49 @@ Behavior details
 - Relative URL proxy: GET /api/fetch?url=/api/... is supported; relative URLs resolve to http://127.0.0.1:5173.
 - Persistence: Webhook updates are saved to status-store.json and shown immediately on load via /api/state.
 
-Unity status (Statuspal)
-------------------------
-- Unity moved to a Statuspal-powered page (`https://status.unity.com/`).
-- We detect Unity incidents by scraping the public page via an HTML heuristic endpoint:
-  - `/api/check-html?url=https://status.unity.com/`
-- Frontend entries for `Unity LevelPlay`, `Unity Ads`, and `Unity Cloud Services` use the HTML checker and share the same `statusUrl`.
- - Notifications are deduped by `statusUrl`, so Unity sends only one alert per continuous incident (and one recovery message).
+Service coverage
+----------------
+- The monitor polls these services every 5 minutes in production (Netlify Scheduled Function):
+  - Google Play Store (and Google Play Services)
+  - Apple App Store
+  - Firebase (subset of products)
+  - Mixpanel
+  - Singular
+  - Sentry
+  - Facebook Audience Network
+  - Google AdMob (via Google Cloud status)
+  - Realm Database (MongoDB)
+  - Slack
+  - Notion
+  - Figma
+  - Jira Software
+
+- Unity services were removed from the dashboard and the background monitor.
 
 Backend monitoring
 ------------------
-- The local server (`server.js`) polls all services every 5 minutes and sends Slack notifications on state transitions (into incident and back to operational).
-- The production Netlify scheduled function (`netlify/functions/monitor.js`) does the same using the site base URL.
-- Page visits do not send Slack messages (client-side Slack notifications are disabled). Only the backend monitor posts.
+- Netlify scheduled function (`netlify/functions/monitor.js`) runs every 5 minutes and polls all services above.
+- Slack notifications:
+  - One message when a service enters incident (severity emoji + title + startedAt + status link).
+  - One message when that incident resolves (“back to normal” + startedAt + resolved time + status link).
+  - Deduped per service using a stable service key; the monitor stores `startedAt` and (when available) `incidentId` inside persisted state to avoid repeats even if incident IDs change or disappear.
+  - Persistence uses Netlify Blobs (store: `status-notify`) so state survives function cold starts.
+- A cooldown guard prevents accidental repeats if persistence is temporarily unavailable.
+- Page visits do not send Slack messages; only the backend monitor posts.
+
+Monitor diagnostics
+-------------------
+- Manually trigger a run:
+  - `https://<site>/.netlify/functions/monitor` (alias: `https://<site>/api/monitor`)
+- Send a Slack test message (no status check):
+  - `https://<site>/.netlify/functions/monitor?test=1`
+- Inspect current vs persisted state to troubleshoot notifications:
+  - `https://<site>/.netlify/functions/monitor?debug=1`
+
+Mixpanel status source
+----------------------
+- Mixpanel now uses only the official Statuspage JSON at `https://www.mixpanelstatus.com` (summary/status). The HTML fallback was removed to avoid false positives.
+
 
 Webhooks (push updates)
 -----------------------
