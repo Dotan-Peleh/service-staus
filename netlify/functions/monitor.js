@@ -153,10 +153,9 @@ exports.handler = async (event) => {
         try {
           const raw = await getJson(svc.url);
           const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
-          let key = getDedupeKey(svc);
-          if (current && current.incidentId) key = `${key}#${String(current.incidentId).trim()}`;
-          const persisted = await getPersistedState(key);
-          results.push({ name: svc.name, current, persisted });
+          const baseKey = getDedupeKey(svc);
+          const persisted = await getPersistedState(baseKey);
+          results.push({ name: svc.name, current, persisted, baseKey });
         } catch (e) {
           results.push({ name: svc.name, error: String(e && e.message || 'error') });
         }
@@ -204,9 +203,9 @@ exports.handler = async (event) => {
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
         const isNewIncident = Boolean(currentIncidentId && persisted.incidentId && currentIncidentId !== persisted.incidentId);
         if (isNewIncident || persisted.lastNotifiedStartAt !== startedAt) {
-          // Cooldown guard in case persistence is unavailable
+          // If new incident or new startAt, bypass cooldown to notify immediately
           const lastTs = await getLastNotifiedTs(`${baseKey}:start`);
-          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
+          if (isNewIncident || persisted.lastNotifiedStartAt !== startedAt || !Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
           const started = new Date(startedAt).toLocaleString();
           const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
           const title = current.title || 'Incident detected';
@@ -230,7 +229,8 @@ exports.handler = async (event) => {
         if (hasStarted && startWasNotified && resolveNotSent) {
           // Cooldown guard for resolve
           const lastTs = await getLastNotifiedTs(`${baseKey}:resolve`);
-          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
+          // Bypass cooldown for resolves to ensure immediate notification
+          if (true || !Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
             const ended = new Date().toLocaleString();
             const startedStr = new Date(persisted.startedAt).toLocaleString();
             const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
