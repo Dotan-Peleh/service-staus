@@ -214,16 +214,18 @@ exports.handler = async (event) => {
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
         const isNewIncident = Boolean(currentIncidentId && persisted.incidentId && currentIncidentId !== persisted.incidentId);
         if (isNewIncident || persisted.lastNotifiedStartAt !== startedAt) {
-          // If new incident or new startAt, bypass cooldown to notify immediately
+          // Suppress duplicates within 120s across concurrent invocations
+          const suppressWindowMs = 120 * 1000;
           const lastTs = await getLastNotifiedTs(`${baseKey}:start`);
-          if (isNewIncident || persisted.lastNotifiedStartAt !== startedAt || !Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
-          const started = new Date(startedAt).toLocaleString();
-          const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
-          const title = current.title || 'Incident detected';
-          const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
-          await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs) {
+            // Pre-set lastTs to coalesce concurrent runs, then send
             await setLastNotifiedTs(`${baseKey}:start`, Date.now());
-          await setPersistedState(baseKey, { state: 'incident', startedAt, lastNotifiedStartAt: startedAt, lastNotifiedResolveAt: null, lastNonIncidentTs: 0, incidentId: currentIncidentId || persisted.incidentId || null });
+            const started = new Date(startedAt).toLocaleString();
+            const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
+            const title = current.title || 'Incident detected';
+            const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+            await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
+            await setPersistedState(baseKey, { state: 'incident', startedAt, lastNotifiedStartAt: startedAt, lastNotifiedResolveAt: null, lastNonIncidentTs: 0, incidentId: currentIncidentId || persisted.incidentId || null });
           }
         } else {
           await setPersistedState(baseKey, { state: 'incident', startedAt, incidentId: currentIncidentId || persisted.incidentId || null });
@@ -238,15 +240,15 @@ exports.handler = async (event) => {
         const startWasNotified = persisted.lastNotifiedStartAt && (persisted.lastNotifiedStartAt === persisted.startedAt);
         const resolveNotSent = persisted.lastNotifiedResolveAt !== persisted.startedAt;
         if (hasStarted && startWasNotified && resolveNotSent) {
-          // Cooldown guard for resolve
+          // Suppress duplicate resolve within 120s across concurrent invocations
+          const suppressWindowMs = 120 * 1000;
           const lastTs = await getLastNotifiedTs(`${baseKey}:resolve`);
-          // Bypass cooldown for resolves to ensure immediate notification
-          if (true || !Number.isFinite(lastTs) || (Date.now() - lastTs) >= COOLDOWN_MINUTES * 60 * 1000) {
+          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs) {
+            await setLastNotifiedTs(`${baseKey}:resolve`, Date.now());
             const ended = new Date().toLocaleString();
             const startedStr = new Date(persisted.startedAt).toLocaleString();
             const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
             await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
-            await setLastNotifiedTs(`${baseKey}:resolve`, Date.now());
             last[svc.name] = { state: 'operational', startedAt: null };
             await setPersistedState(baseKey, { state: 'operational', startedAt: null, lastNotifiedResolveAt: persisted.startedAt, lastNonIncidentTs: nowTs, incidentId: null });
           }
