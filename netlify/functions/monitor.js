@@ -170,7 +170,8 @@ exports.handler = async (event) => {
           return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: lastRunAt ? Number(lastRunAt) : 0 }) };
         }
       } catch (_) {}
-      return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: 0 }) };
+      const mem = (globalThis.__LAST_RUN_AT__ ? Number(globalThis.__LAST_RUN_AT__) : 0) || 0;
+      return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: mem }) };
     }
   } catch (_) {}
   const base = process.env.URL || 'https://3rd-party-services.netlify.app';
@@ -292,6 +293,7 @@ exports.handler = async (event) => {
       await store.set('meta:lastRunAt', String(Date.now()));
     }
   } catch (_) {}
+  globalThis.__LAST_RUN_AT__ = Date.now();
 
   return { statusCode: 200, body: 'ok' };
 };
