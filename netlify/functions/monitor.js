@@ -162,6 +162,16 @@ exports.handler = async (event) => {
       }
       return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(results) };
     }
+    if (qs && (qs.health === '1' || qs.health === 'true')) {
+      try {
+        if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+          const store = netlifyBlobs.getStore('status-notify');
+          const lastRunAt = await store.get('meta:lastRunAt', { type: 'text' });
+          return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: lastRunAt ? Number(lastRunAt) : 0 }) };
+        }
+      } catch (_) {}
+      return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: 0 }) };
+    }
   } catch (_) {}
   const base = process.env.URL || 'https://3rd-party-services.netlify.app';
   const services = [
@@ -274,6 +284,14 @@ exports.handler = async (event) => {
       // ignore per-service errors
     }
   }
+
+  // Persist last successful run timestamp for health checks
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore('status-notify');
+      await store.set('meta:lastRunAt', String(Date.now()));
+    }
+  } catch (_) {}
 
   return { statusCode: 200, body: 'ok' };
 };
