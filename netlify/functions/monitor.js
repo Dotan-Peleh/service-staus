@@ -14,7 +14,7 @@ async function getLastNotifiedTs(key) {
   const k = `notify:${key}`;
   try {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore('status-notify');
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
       const val = await store.get(k, { type: 'text' });
       const ts = val ? Number(val) : 0;
       return Number.isFinite(ts) ? ts : 0;
@@ -28,7 +28,7 @@ async function setLastNotifiedTs(key, ts) {
   const k = `notify:${key}`;
   try {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore('status-notify');
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
       await store.set(k, String(ts));
       return;
     }
@@ -42,7 +42,7 @@ async function getPersistedState(key) {
   const k = `state:${key}`;
   try {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore('status-notify');
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
       const val = await store.get(k, { type: 'text' });
       if (!val) return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null };
       try {
@@ -67,7 +67,7 @@ async function setPersistedState(key, value) {
   const k = `state:${key}`;
   try {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore('status-notify');
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
       await store.set(k, JSON.stringify(value));
       return;
     }
@@ -165,7 +165,7 @@ exports.handler = async (event) => {
     if (qs && (qs.health === '1' || qs.health === 'true')) {
       try {
         if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-          const store = netlifyBlobs.getStore('status-notify');
+          const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
           const lastRunAt = await store.get('meta:lastRunAt', { type: 'text' });
           return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: lastRunAt ? Number(lastRunAt) : 0 }) };
         }
@@ -289,7 +289,7 @@ exports.handler = async (event) => {
   // Persist last successful run timestamp for health checks
   try {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore('status-notify');
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
       await store.set('meta:lastRunAt', String(Date.now()));
     }
   } catch (_) {}
