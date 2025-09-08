@@ -44,23 +44,27 @@ async function getPersistedState(key) {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
       const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
       const val = await store.get(k, { type: 'text' });
-      if (!val) return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null };
+      if (!val) return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
       try {
         const parsed = JSON.parse(val);
         return {
           state: parsed.state || 'unknown',
           startedAt: parsed.startedAt || null,
+          startKey: parsed.startKey || null,
+          incidentId: parsed.incidentId || null,
           lastNonIncidentTs: Number(parsed.lastNonIncidentTs || 0),
           lastNotifiedStartAt: parsed.lastNotifiedStartAt || null,
           lastNotifiedResolveAt: parsed.lastNotifiedResolveAt || null,
+          lastNotifiedStartKey: parsed.lastNotifiedStartKey || null,
+          lastNotifiedResolveKey: parsed.lastNotifiedResolveKey || null,
         };
       } catch (_) {
-        return { state: 'unknown', startedAt: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null };
+        return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
       }
     }
   } catch (_) {}
   globalThis.__NOTIFY_STATE__ = globalThis.__NOTIFY_STATE__ || {};
-  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null };
+  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
 }
 
 async function setPersistedState(key, value) {
@@ -213,9 +217,11 @@ exports.handler = async (event) => {
     try {
       const raw = await getJson(svc.url);
       const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
-      // Use a stable key per service; store incidentId inside the persisted value
+      // Use a stable key per service; compute a stable incident key (incidentId or startedAt ms)
       const baseKey = getDedupeKey(svc);
       const currentIncidentId = current && current.incidentId ? String(current.incidentId).trim() : null;
+      const currentStartedAtMs = current && current.startedAt ? Date.parse(current.startedAt) : null;
+      const currentIncidentKey = currentIncidentId ? `id:${currentIncidentId}` : (Number.isFinite(currentStartedAtMs) ? `ts:${currentStartedAtMs}` : null);
       const prev = last[svc.name] || { state: 'unknown', startedAt: null };
       const persisted = await getPersistedState(baseKey);
       const nowTs = Date.now();
@@ -224,8 +230,10 @@ exports.handler = async (event) => {
       if (current.state === 'incident') {
         const startedAt = current.startedAt || persisted.startedAt || new Date().toISOString();
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
-        const isNewIncident = Boolean(currentIncidentId && persisted.incidentId && currentIncidentId !== persisted.incidentId);
-        if (isNewIncident || persisted.lastNotifiedStartAt !== startedAt) {
+        const persistedStartKey = persisted.startKey || (persisted.startedAt ? `ts:${Date.parse(persisted.startedAt)}` : null) || (persisted.incidentId ? `id:${persisted.incidentId}` : null);
+        const startKey = currentIncidentKey || (startedAt ? `ts:${Date.parse(startedAt)}` : null);
+        const isNewIncident = Boolean(startKey && persistedStartKey && startKey !== persistedStartKey);
+        if (isNewIncident || (startKey && persisted.lastNotifiedStartKey !== startKey)) {
           // Suppress duplicates within 120s across concurrent invocations
           const suppressWindowMs = 120 * 1000;
           const lastTs = await getLastNotifiedTs(`${baseKey}:start`);
@@ -237,10 +245,10 @@ exports.handler = async (event) => {
             const title = current.title || 'Incident detected';
             const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
             await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${started}${link}`);
-            await setPersistedState(baseKey, { state: 'incident', startedAt, lastNotifiedStartAt: startedAt, lastNotifiedResolveAt: null, lastNonIncidentTs: 0, incidentId: currentIncidentId || persisted.incidentId || null });
+            await setPersistedState(baseKey, { state: 'incident', startedAt, startKey: startKey || null, lastNotifiedStartAt: startedAt, lastNotifiedStartKey: startKey || null, lastNotifiedResolveAt: null, lastNotifiedResolveKey: null, lastNonIncidentTs: 0, incidentId: currentIncidentId || persisted.incidentId || null });
           }
         } else {
-          await setPersistedState(baseKey, { state: 'incident', startedAt, incidentId: currentIncidentId || persisted.incidentId || null });
+          await setPersistedState(baseKey, { state: 'incident', startedAt, startKey: currentIncidentKey || persisted.startKey || null, incidentId: currentIncidentId || persisted.incidentId || null });
         }
         continue;
       }
@@ -248,9 +256,10 @@ exports.handler = async (event) => {
       // Returning to operational: notify once per incident
       if (current.state === 'operational') {
         // Resolve if we previously notified a start for this incident and haven't notified resolve yet
-        const hasStarted = Boolean(persisted.startedAt);
-        const startWasNotified = persisted.lastNotifiedStartAt && (persisted.lastNotifiedStartAt === persisted.startedAt);
-        const resolveNotSent = persisted.lastNotifiedResolveAt !== persisted.startedAt;
+        const hasStarted = Boolean(persisted.startedAt || persisted.startKey);
+        const startKey = persisted.startKey || (persisted.startedAt ? `ts:${Date.parse(persisted.startedAt)}` : null);
+        const startWasNotified = Boolean(persisted.lastNotifiedStartKey && startKey && persisted.lastNotifiedStartKey === startKey);
+        const resolveNotSent = !persisted.lastNotifiedResolveKey || (startKey && persisted.lastNotifiedResolveKey !== startKey);
         if (hasStarted && startWasNotified && resolveNotSent) {
           // Suppress duplicate resolve within 120s across concurrent invocations
           const suppressWindowMs = 120 * 1000;
@@ -262,7 +271,7 @@ exports.handler = async (event) => {
             const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
             await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
             last[svc.name] = { state: 'operational', startedAt: null };
-            await setPersistedState(baseKey, { state: 'operational', startedAt: null, lastNotifiedResolveAt: persisted.startedAt, lastNonIncidentTs: nowTs, incidentId: null });
+            await setPersistedState(baseKey, { state: 'operational', startedAt: null, startKey: null, lastNotifiedResolveAt: persisted.startedAt || null, lastNotifiedResolveKey: startKey || null, lastNonIncidentTs: nowTs, incidentId: null });
           }
           continue;
         }
