@@ -257,6 +257,11 @@ exports.handler = async (event) => {
       if (current.state === 'incident') {
         const startedAt = current.startedAt || persisted.startedAt || new Date().toISOString();
         last[svc.name] = { state: 'incident', severity: current.severity || 'minor', startedAt };
+        // Hard guard: if we're already in incident and start was notified, never resend start
+        if (persisted.state === 'incident' && persisted.lastNotifiedStartKey) {
+          await setPersistedState(baseKey, { state: 'incident', startedAt, startKey: persisted.startKey || currentIncidentKey || null, lastNotifiedStartAt: persisted.lastNotifiedStartAt || startedAt, lastNotifiedStartKey: persisted.lastNotifiedStartKey, incidentId: currentIncidentId || persisted.incidentId || null });
+          continue;
+        }
         const persistedStartKey = persisted.startKey || (persisted.startedAt ? `ts:${Date.parse(persisted.startedAt)}` : null) || (persisted.incidentId ? `id:${persisted.incidentId}` : null);
         const startKey = currentIncidentKey || (startedAt ? `ts:${Date.parse(startedAt)}` : null);
         const isNewIncident = Boolean(startKey && persistedStartKey && startKey !== persistedStartKey);
