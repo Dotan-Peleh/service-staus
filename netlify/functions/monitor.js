@@ -248,7 +248,8 @@ exports.handler = async (event) => {
       const baseKey = getDedupeKey(svc);
       const currentIncidentId = current && current.incidentId ? String(current.incidentId).trim() : null;
       const currentStartedAtMs = current && current.startedAt ? Date.parse(current.startedAt) : null;
-      const currentIncidentKey = currentIncidentId ? `id:${currentIncidentId}` : (Number.isFinite(currentStartedAtMs) ? `ts:${currentStartedAtMs}` : null);
+      // Prefer startedAt-based key to tolerate upstream incidentId churn
+      const currentIncidentKey = Number.isFinite(currentStartedAtMs) ? `ts:${currentStartedAtMs}` : (currentIncidentId ? `id:${currentIncidentId}` : null);
       const prev = last[svc.name] || { state: 'unknown', startedAt: null };
       const persisted = await getPersistedState(baseKey);
       const nowTs = Date.now();
