@@ -264,9 +264,13 @@ exports.handler = async (event) => {
           // Suppress duplicates within 120s across concurrent invocations
           const suppressWindowMs = 120 * 1000;
           const lastTs = await getLastNotifiedTs(`${baseKey}:start`);
-          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs) {
+          const sigKey = `${baseKey}:start`;
+          const sigVal = `start:${startKey || startedAt}`;
+          const lastSig = await getLastSignature(sigKey);
+          if ((lastSig !== sigVal) && (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs)) {
             // Pre-set lastTs to coalesce concurrent runs, then send
             await setLastNotifiedTs(`${baseKey}:start`, Date.now());
+            await setLastSignature(sigKey, sigVal);
             const started = new Date(startedAt).toLocaleString();
             const emoji = (current.severity === 'critical') ? ':red_circle:' : ':large_yellow_circle:';
             const title = current.title || 'Incident detected';
@@ -291,8 +295,12 @@ exports.handler = async (event) => {
         if (hasStarted && startWasNotified && resolveNotSent) {
           const suppressWindowMs = 120 * 1000;
           const lastTs = await getLastNotifiedTs(`${baseKey}:resolve`);
-          if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs) {
+          const sigKey = `${baseKey}:resolve`;
+          const sigVal = `resolve:${startKey || ''}`;
+          const lastSig = await getLastSignature(sigKey);
+          if ((lastSig !== sigVal) && (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs)) {
             await setLastNotifiedTs(`${baseKey}:resolve`, Date.now());
+            await setLastSignature(sigKey, sigVal);
             const ended = new Date().toLocaleString();
             const startedStr = new Date(persisted.startedAt || '').toLocaleString();
             const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
