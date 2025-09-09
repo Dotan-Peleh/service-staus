@@ -192,3 +192,79 @@ Notes
 - When a service aggregates multiple cards (e.g., Google Play Store and Google Play Services), the first check result is reused and shown as “Also covers …”.
 
 
+Logic Reference
+---------------
+
+Architecture
+------------
+- Frontend (`index.html`) renders cards and calls internal `/api/*` endpoints.
+- Local server (`server.js`) serves static files and exposes normalized endpoints for development.
+- Netlify functions:
+  - `netlify/functions/api.js`: All production `/api/*` endpoints (Apple, Google Play/Cloud, Facebook, Firebase, Mixpanel, Slack, Statuspage proxy, diagnostics).
+  - `netlify/functions/monitor.js`: Scheduled (or externally invoked) background monitor that polls services and posts Slack notifications.
+
+Normalized status schema
+------------------------
+Each endpoint returns a normalized JSON object:
+```json
+{ "state": "operational" | "incident" | "unknown", "severity": "minor" | "critical" | null, "title": "string|null", "eta": "ISO|null", "detail": "string|null", "lastIncident": { "title": "string", "endedAt": "ISO|null" } }
+```
+- For active incidents, endpoints may also include `startedAt` and `incidentId` when available.
+
+Parsing logic by service
+------------------------
+- Apple App Store: Apple JSON/JS (`system_status_en_US.json|.js`) → checks events for App Store / App Store Connect.
+- Google Play Store/Services: HTML heuristics; detects ongoing incident vs last resolved incident.
+- Google Cloud (AdMob infra): HTML heuristics with marketing text sanitization; same ongoing vs last incident.
+- Facebook Audience Network: HTML heuristics from `metastatus.com` with resolved handling.
+- Firebase: products.json + incidents.json; selects Authentication, Remote Config, Crashlytics; detects active incidents.
+- Mixpanel: Statuspage JSON only (`www.mixpanelstatus.com`); no HTML fallback. Returns `startedAt` and `incidentId` when present.
+- Slack: API `v2.0.0/current` (preferred) then HTML fallback with strict green detection.
+- Statuspage-backed services (Singular, Sentry, Notion, Figma, Jira, Realm/MongoDB): `summary.json` for active incidents with `impact` mapping; `incidents.json` used where needed to surface last resolved.
+
+Background monitoring and notifications
+--------------------------------------
+- Runner: External scheduler (recommended GCP Cloud Scheduler) GETs `/.netlify/functions/monitor` every 5 minutes.
+- What’s polled: Google Play (Store/Services), Apple App Store, Firebase, Mixpanel, Singular, Sentry, Facebook Audience Network, Google AdMob (Cloud), Realm/MongoDB, Slack, Notion, Figma, Jira Software.
+- Slack behavior:
+  - On incident start: one message (emoji by severity, title, startedAt, status link)
+  - On resolve: one message (back to normal, startedAt, resolved time, status link)
+- Dedup and idempotency:
+  - Stable service key: derived from `statusUrl`.
+  - Stable incident key (startKey): `id:<incidentId>` when available, else `ts:<startedAt_ms>`.
+  - Persisted fields per service: `state, startedAt, startKey, lastNotifiedStartAt, lastNotifiedStartKey, lastNotifiedResolveAt, lastNotifiedResolveKey, lastNonIncidentTs, incidentId`.
+  - A start is sent only if `startKey` is new or was never notified.
+  - A resolve is sent only if a start for the same `startKey` was previously notified and no resolve was sent yet.
+  - Overlap guards: coalesce runs if the last run was <60s ago; 120s suppression window with pre-set last-notified timestamps prevents concurrent duplicate sends.
+  - Local monitor is disabled by default in `server.js` (enable with `ENABLE_LOCAL_MONITOR=1`) to avoid double posts alongside the cloud scheduler.
+
+Persistence
+-----------
+- Netlify Blobs (store `status-notify`) hold per-service state and last-run timestamps; works across cold starts.
+- Additional in-memory fallbacks exist for health in case Blobs are temporarily unavailable.
+
+Endpoints
+---------
+- Status checks (examples):
+  - `/api/apple/status`, `/api/google/play-status`, `/api/google/cloud-status`, `/api/facebook/status`, `/api/firebase/status`, `/api/mixpanel/status`, `/api/slack/status`
+  - Statuspage proxy: `/api/statuspage?base=https://<statuspage-base>`
+  - Proxy (dev tools): `/api/fetch?url=...`, `/api/check-html?url=...`
+- Monitor:
+  - Run now: `/.netlify/functions/monitor` (alias: `/api/monitor`)
+  - Test Slack: `/.netlify/functions/monitor?test=1`
+  - Debug state: `/.netlify/functions/monitor?debug=1`
+  - Health: `/.netlify/functions/monitor?health=1` (lastRunAt in ms)
+
+Configuration
+-------------
+- Slack: set `SLACK_WEBHOOK_URL` or `SLACK_BOT_TOKEN` + `SLACK_CHANNEL` on Netlify site env.
+- Scheduler: GCP Cloud Scheduler → HTTP GET to `https://<site>/.netlify/functions/monitor` every 5 minutes (UTC).
+- Local monitor: OFF by default; set `ENABLE_LOCAL_MONITOR=1` to enable.
+
+Troubleshooting
+---------------
+- No Slack messages: verify `GET /api/notify/enabled` is true; test with `/api/notify/slack` (POST) and ensure bot invited to channel.
+- Repeats: ensure only one scheduler is active (Netlify schedule disabled; use GCP). Check `?debug=1` — confirm `startKey`, `lastNotifiedStartKey`, and `lastNotifiedResolveKey` values. Overlap guard and suppression should prevent duplicates.
+- No resolves: check Jira/Sentry show operational in `?debug=1` and persisted state had `lastNotifiedStartKey`; resolution will send once and clear state.
+
+
