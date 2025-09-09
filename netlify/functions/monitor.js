@@ -37,6 +37,33 @@ async function setLastNotifiedTs(key, ts) {
   globalThis.__NOTIFY_LAST__[k] = ts;
 }
 
+// Persisted message signature per service to ensure idempotent posts
+async function getLastSignature(key) {
+  const k = `sig:${key}`;
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
+      const val = await store.get(k, { type: 'text' });
+      return val || '';
+    }
+  } catch (_) {}
+  globalThis.__NOTIFY_SIG__ = globalThis.__NOTIFY_SIG__ || {};
+  return globalThis.__NOTIFY_SIG__[k] || '';
+}
+
+async function setLastSignature(key, sig) {
+  const k = `sig:${key}`;
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
+      await store.set(k, String(sig || ''));
+      return;
+    }
+  } catch (_) {}
+  globalThis.__NOTIFY_SIG__ = globalThis.__NOTIFY_SIG__ || {};
+  globalThis.__NOTIFY_SIG__[k] = String(sig || '');
+}
+
 // Persisted incident state to ensure we alert only once per continuous incident
 async function getPersistedState(key) {
   const k = `state:${key}`;
@@ -255,31 +282,34 @@ exports.handler = async (event) => {
 
       // Returning to operational: notify once per incident
       if (current.state === 'operational') {
-        // Resolve if we previously notified a start for this incident and haven't notified resolve yet
         const hasStarted = Boolean(persisted.startedAt || persisted.startKey);
         const startKey = persisted.startKey || (persisted.startedAt ? `ts:${Date.parse(persisted.startedAt)}` : null);
         const startWasNotified = Boolean(persisted.lastNotifiedStartKey && startKey && persisted.lastNotifiedStartKey === startKey);
         const resolveNotSent = !persisted.lastNotifiedResolveKey || (startKey && persisted.lastNotifiedResolveKey !== startKey);
+
+        // If we previously sent a start for this incident and haven't sent resolve yet, send resolve now
         if (hasStarted && startWasNotified && resolveNotSent) {
-          // Suppress duplicate resolve within 120s across concurrent invocations
           const suppressWindowMs = 120 * 1000;
           const lastTs = await getLastNotifiedTs(`${baseKey}:resolve`);
           if (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs) {
             await setLastNotifiedTs(`${baseKey}:resolve`, Date.now());
             const ended = new Date().toLocaleString();
-            const startedStr = new Date(persisted.startedAt).toLocaleString();
+            const startedStr = new Date(persisted.startedAt || '').toLocaleString();
             const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
             await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
             last[svc.name] = { state: 'operational', startedAt: null };
             await setPersistedState(baseKey, { state: 'operational', startedAt: null, startKey: null, lastNotifiedResolveAt: persisted.startedAt || null, lastNotifiedResolveKey: startKey || null, lastNonIncidentTs: nowTs, incidentId: null });
           }
-          continue;
+          return { statusCode: 200, body: 'ok' };
         }
-        // keep state without duplicate notification
-        if (prev.state !== 'operational') {
-          last[svc.name] = { state: 'operational', startedAt: null };
+
+        // If we never sent a start (no notification to pair), simply mark operational
+        if (!startWasNotified) {
+          if (prev.state !== 'operational') {
+            last[svc.name] = { state: 'operational', startedAt: null };
+          }
+          await setPersistedState(baseKey, { state: 'operational', incidentId: null });
         }
-        await setPersistedState(baseKey, { state: 'operational', incidentId: null });
         continue;
       }
 
