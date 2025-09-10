@@ -201,6 +201,7 @@ exports.handler = async (event) => {
   // Optional test trigger: /.netlify/functions/monitor?test=1
   try {
     const qs = (event && event.queryStringParameters) || {};
+    const forceRun = !!(qs && (qs.force === '1' || qs.force === 'true'));
     if (qs && (qs.test === '1' || qs.test === 'true')) {
       await notifySlackBackground(':mega: Monitor test ping — Netlify function is able to post to Slack');
       return { statusCode: 200, body: 'test-ok' };
@@ -249,12 +250,14 @@ exports.handler = async (event) => {
   } catch (_) {}
   const base = process.env.URL || 'https://3rd-party-services.netlify.app';
 
-  // Coalesce overlapping invocations: skip if a run occurred <60s ago
+  // Coalesce overlapping invocations: skip if a run occurred <60s ago (unless force=1)
   try {
-    const lastRun = await kvGet('meta:lastRunAt');
-    const lastTs = lastRun ? Number(lastRun) : 0;
-    if (Number.isFinite(lastTs) && (Date.now() - lastTs) < 60 * 1000) {
-      return { statusCode: 200, body: 'ok-coalesced' };
+    if (!(event && event.queryStringParameters && (event.queryStringParameters.force === '1' || event.queryStringParameters.force === 'true'))) {
+      const lastRun = await kvGet('meta:lastRunAt');
+      const lastTs = lastRun ? Number(lastRun) : 0;
+      if (Number.isFinite(lastTs) && (Date.now() - lastTs) < 60 * 1000) {
+        return { statusCode: 200, body: 'ok-coalesced' };
+      }
     }
   } catch (_) {}
   const services = [

@@ -77,7 +77,11 @@ Service coverage
   - One message when a service enters incident (severity emoji + title + startedAt + status link).
   - One message when that incident resolves (“back to normal” + startedAt + resolved time + status link).
   - Deduped per service using a stable service key; the monitor stores `startedAt` and (when available) `incidentId` inside persisted state to avoid repeats even if incident IDs change or disappear.
-  - Persistence uses Netlify Blobs (store: `status-notify`) so state survives function cold starts.
+  - Persistence uses GCP Firestore when configured (preferred), with Netlify Blobs (`status-notify`) as fallback and then in-memory. Firestore collection: `kv_status_notify`. Keys are sanitized (slashes `/` replaced with `_`). Examples you should see in Firestore:
+    - `meta:lastRunAt`
+    - `state:https:__jira-software.status.atlassian.com`
+    - `notify:https:__status.sentry.io:start`
+    - `sig:https:__status.sentry.io:start`
 - A cooldown guard prevents accidental repeats; genuine changes (new incident, resolution) notify immediately.
 - Page visits do not send Slack messages; only the backend monitor posts.
 
@@ -85,14 +89,14 @@ Monitor diagnostics
 -------------------
 - Manually trigger a run:
   - `https://<site>/.netlify/functions/monitor` (alias: `https://<site>/api/monitor`)
+  - Force a run (bypass 60s coalescing): `https://<site>/.netlify/functions/monitor?force=1`
 - Send a Slack test message (no status check):
   - `https://<site>/.netlify/functions/monitor?test=1`
 - Inspect current vs persisted state to troubleshoot notifications:
   - `https://<site>/.netlify/functions/monitor?debug=1`
- - Health (last successful run timestamp, ms since epoch):
-   - `https://<site>/.netlify/functions/monitor?health=1`
-   - Requires the function to write to Netlify Blobs (already included via `@netlify/blobs`). No extra UI enable step is needed.
-   - If `lastRunAt` stays 0, ensure your scheduler targets `/.netlify/functions/monitor` (not `/api/monitor`).
+- Health (last successful run timestamp, ms since epoch):
+  - `https://<site>/.netlify/functions/monitor?health=1`
+  - Uses the shared KV provider (Firestore if configured). If `lastRunAt` stays 0, ensure your scheduler targets `/.netlify/functions/monitor` (not `/api/monitor`).
 
 Mixpanel status source
 ----------------------
@@ -245,7 +249,7 @@ Persistence
   - Add env vars (Netlify site or secrets manager):
     - `GCP_PROJECT_ID`
     - either `GCP_SA_JSON` (raw JSON) or `GCP_SA_JSON_BASE64` (base64 of the same JSON)
-  - The monitor will write to collection `kv_status_notify` with document IDs like `state:<serviceKey>`, `notify:<serviceKey>`, `sig:<serviceKey>`, and `meta:lastRunAt`.
+  - The monitor writes to collection `kv_status_notify` with document IDs like `state:<serviceKey>`, `notify:<serviceKey>`, `sig:<serviceKey>`, and `meta:lastRunAt`. The `<serviceKey>` replaces `/` with `_` (e.g., `https:__status.sentry.io`).
 - Netlify Blobs remains as a fallback when Firestore isn’t configured; memory is the last resort.
 
 Endpoints
