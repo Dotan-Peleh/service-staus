@@ -5,106 +5,145 @@ const https = require('https');
 const utils = require('../../lib/status-utils');
 let netlifyBlobs = null;
 try { netlifyBlobs = require('@netlify/blobs'); } catch (_) { netlifyBlobs = null; }
+let FirestoreMod = null;
+try { FirestoreMod = require('@google-cloud/firestore'); } catch (_) { FirestoreMod = null; }
 
 const COOLDOWN_MINUTES = Number(process.env.NOTIFY_COOLDOWN_MINUTES || '180'); // default 3h
 const RESET_UNKNOWN_MINUTES = Number(process.env.RESET_UNKNOWN_MINUTES || '60'); // reset incident after 60m of non-incident/unknown
 
-async function getLastNotifiedTs(key) {
-  const now = Date.now();
-  const k = `notify:${key}`;
+// --- KV persistence: prefers GCP Firestore → Netlify Blobs → in-memory ---
+let __firestoreClient = null;
+function getFirestoreClient() {
+  if (__firestoreClient !== null) return __firestoreClient;
+  try {
+    if (!FirestoreMod) return (__firestoreClient = null);
+    const { Firestore } = FirestoreMod;
+    const projectId = process.env.GCP_PROJECT_ID || '';
+    const saJsonRaw = process.env.GCP_SA_JSON || '';
+    const saB64 = process.env.GCP_SA_JSON_BASE64 || '';
+    let creds = null;
+    if (saJsonRaw) {
+      creds = JSON.parse(saJsonRaw);
+    } else if (saB64) {
+      const json = Buffer.from(saB64, 'base64').toString('utf8');
+      creds = JSON.parse(json);
+    }
+    if (!projectId || !creds || !creds.client_email || !creds.private_key) {
+      return (__firestoreClient = null);
+    }
+    // Normalize private key newlines
+    const private_key = String(creds.private_key).replace(/\\n/g, '\n');
+    __firestoreClient = new Firestore({ projectId, credentials: { client_email: creds.client_email, private_key } });
+    return __firestoreClient;
+  } catch (_) {
+    return (__firestoreClient = null);
+  }
+}
+
+async function kvGet(key) {
+  // Firestore first
+  try {
+    const fs = getFirestoreClient();
+    if (fs) {
+      const ref = fs.collection('kv_status_notify').doc(key);
+      const snap = await ref.get();
+      if (snap.exists) {
+        const data = snap.data() || {};
+        return typeof data.value === 'string' ? data.value : (data.value != null ? String(data.value) : null);
+      }
+      return null;
+    }
+  } catch (_) {}
+  // Netlify Blobs
   try {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
       const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      const val = await store.get(k, { type: 'text' });
-      const ts = val ? Number(val) : 0;
-      return Number.isFinite(ts) ? ts : 0;
+      const val = await store.get(key, { type: 'text' });
+      return val || null;
     }
   } catch (_) {}
-  globalThis.__NOTIFY_LAST__ = globalThis.__NOTIFY_LAST__ || {};
-  return globalThis.__NOTIFY_LAST__[k] || 0;
+  // In-memory fallback
+  globalThis.__KV_MEM__ = globalThis.__KV_MEM__ || {};
+  return Object.prototype.hasOwnProperty.call(globalThis.__KV_MEM__, key) ? globalThis.__KV_MEM__[key] : null;
+}
+
+async function kvSet(key, value) {
+  const v = String(value == null ? '' : value);
+  // Firestore first
+  try {
+    const fs = getFirestoreClient();
+    if (fs) {
+      const ref = fs.collection('kv_status_notify').doc(key);
+      await ref.set({ value: v, updatedAt: Date.now() }, { merge: true });
+      return;
+    }
+  } catch (_) {}
+  // Netlify Blobs
+  try {
+    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
+      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
+      await store.set(key, v);
+      return;
+    }
+  } catch (_) {}
+  // In-memory fallback
+  globalThis.__KV_MEM__ = globalThis.__KV_MEM__ || {};
+  globalThis.__KV_MEM__[key] = v;
+}
+
+async function getLastNotifiedTs(key) {
+  const k = `notify:${key}`;
+  const val = await kvGet(k);
+  const ts = val ? Number(val) : 0;
+  return Number.isFinite(ts) ? ts : 0;
 }
 
 async function setLastNotifiedTs(key, ts) {
   const k = `notify:${key}`;
-  try {
-    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      await store.set(k, String(ts));
-      return;
-    }
-  } catch (_) {}
-  globalThis.__NOTIFY_LAST__ = globalThis.__NOTIFY_LAST__ || {};
-  globalThis.__NOTIFY_LAST__[k] = ts;
+  await kvSet(k, String(ts));
 }
 
 // Persisted message signature per service to ensure idempotent posts
 async function getLastSignature(key) {
   const k = `sig:${key}`;
-  try {
-    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      const val = await store.get(k, { type: 'text' });
-      return val || '';
-    }
-  } catch (_) {}
-  globalThis.__NOTIFY_SIG__ = globalThis.__NOTIFY_SIG__ || {};
-  return globalThis.__NOTIFY_SIG__[k] || '';
+  const val = await kvGet(k);
+  return val || '';
 }
 
 async function setLastSignature(key, sig) {
   const k = `sig:${key}`;
-  try {
-    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      await store.set(k, String(sig || ''));
-      return;
-    }
-  } catch (_) {}
-  globalThis.__NOTIFY_SIG__ = globalThis.__NOTIFY_SIG__ || {};
-  globalThis.__NOTIFY_SIG__[k] = String(sig || '');
+  await kvSet(k, String(sig || ''));
 }
 
 // Persisted incident state to ensure we alert only once per continuous incident
 async function getPersistedState(key) {
   const k = `state:${key}`;
   try {
-    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      const val = await store.get(k, { type: 'text' });
-      if (!val) return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
-      try {
-        const parsed = JSON.parse(val);
-        return {
-          state: parsed.state || 'unknown',
-          startedAt: parsed.startedAt || null,
-          startKey: parsed.startKey || null,
-          incidentId: parsed.incidentId || null,
-          lastNonIncidentTs: Number(parsed.lastNonIncidentTs || 0),
-          lastNotifiedStartAt: parsed.lastNotifiedStartAt || null,
-          lastNotifiedResolveAt: parsed.lastNotifiedResolveAt || null,
-          lastNotifiedStartKey: parsed.lastNotifiedStartKey || null,
-          lastNotifiedResolveKey: parsed.lastNotifiedResolveKey || null,
-        };
-      } catch (_) {
-        return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
-      }
+    const val = await kvGet(k);
+    if (!val) return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
+    try {
+      const parsed = JSON.parse(val);
+      return {
+        state: parsed.state || 'unknown',
+        startedAt: parsed.startedAt || null,
+        startKey: parsed.startKey || null,
+        incidentId: parsed.incidentId || null,
+        lastNonIncidentTs: Number(parsed.lastNonIncidentTs || 0),
+        lastNotifiedStartAt: parsed.lastNotifiedStartAt || null,
+        lastNotifiedResolveAt: parsed.lastNotifiedResolveAt || null,
+        lastNotifiedStartKey: parsed.lastNotifiedStartKey || null,
+        lastNotifiedResolveKey: parsed.lastNotifiedResolveKey || null,
+      };
+    } catch (_) {
+      return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
     }
   } catch (_) {}
-  globalThis.__NOTIFY_STATE__ = globalThis.__NOTIFY_STATE__ || {};
-  return globalThis.__NOTIFY_STATE__[k] || { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
+  return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
 }
 
 async function setPersistedState(key, value) {
   const k = `state:${key}`;
-  try {
-    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      await store.set(k, JSON.stringify(value));
-      return;
-    }
-  } catch (_) {}
-  globalThis.__NOTIFY_STATE__ = globalThis.__NOTIFY_STATE__ || {};
-  globalThis.__NOTIFY_STATE__[k] = value;
+  await kvSet(k, JSON.stringify(value));
 }
 
 function getDedupeKey(svc) {
@@ -210,8 +249,7 @@ exports.handler = async (event) => {
   // Coalesce overlapping invocations: skip if a run occurred <60s ago
   try {
     if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      const lastRun = store ? await store.get('meta:lastRunAt', { type: 'text' }) : null;
+      const lastRun = await kvGet('meta:lastRunAt');
       const lastTs = lastRun ? Number(lastRun) : 0;
       if (Number.isFinite(lastTs) && (Date.now() - lastTs) < 60 * 1000) {
         return { statusCode: 200, body: 'ok-coalesced' };
@@ -354,12 +392,7 @@ exports.handler = async (event) => {
   }
 
   // Persist last successful run timestamp for health checks
-  try {
-    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-      await store.set('meta:lastRunAt', String(Date.now()));
-    }
-  } catch (_) {}
+  try { await kvSet('meta:lastRunAt', String(Date.now())); } catch (_) {}
   globalThis.__LAST_RUN_AT__ = Date.now();
 
   return { statusCode: 200, body: 'ok' };

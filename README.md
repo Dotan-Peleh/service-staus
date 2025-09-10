@@ -240,8 +240,13 @@ Background monitoring and notifications
 
 Persistence
 -----------
-- Netlify Blobs (store `status-notify`) hold per-service state and last-run timestamps; works across cold starts.
-- Additional in-memory fallbacks exist for health in case Blobs are temporarily unavailable.
+- Persistence order: GCP Firestore → Netlify Blobs → in-memory.
+- Firestore setup:
+  - Add env vars (Netlify site or secrets manager):
+    - `GCP_PROJECT_ID`
+    - either `GCP_SA_JSON` (raw JSON) or `GCP_SA_JSON_BASE64` (base64 of the same JSON)
+  - The monitor will write to collection `kv_status_notify` with document IDs like `state:<serviceKey>`, `notify:<serviceKey>`, `sig:<serviceKey>`, and `meta:lastRunAt`.
+- Netlify Blobs remains as a fallback when Firestore isn’t configured; memory is the last resort.
 
 Endpoints
 ---------
