@@ -40,12 +40,17 @@ function getFirestoreClient() {
   }
 }
 
+// Firestore document IDs cannot contain '/'. Sanitize keys when using Firestore.
+function fsSanitizeId(key) {
+  try { return String(key).replace(/\//g, '_'); } catch (_) { return String(key || ''); }
+}
+
 async function kvGet(key) {
   // Firestore first
   try {
     const fs = getFirestoreClient();
     if (fs) {
-      const ref = fs.collection('kv_status_notify').doc(key);
+      const ref = fs.collection('kv_status_notify').doc(fsSanitizeId(key));
       const snap = await ref.get();
       if (snap.exists) {
         const data = snap.data() || {};
@@ -73,7 +78,7 @@ async function kvSet(key, value) {
   try {
     const fs = getFirestoreClient();
     if (fs) {
-      const ref = fs.collection('kv_status_notify').doc(key);
+      const ref = fs.collection('kv_status_notify').doc(fsSanitizeId(key));
       await ref.set({ value: v, updatedAt: Date.now() }, { merge: true });
       return;
     }
@@ -234,11 +239,9 @@ exports.handler = async (event) => {
     }
     if (qs && (qs.health === '1' || qs.health === 'true')) {
       try {
-        if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-          const store = netlifyBlobs.getStore && netlifyBlobs.getStore({ name: 'status-notify' });
-          const lastRunAt = await store.get('meta:lastRunAt', { type: 'text' });
-          return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: lastRunAt ? Number(lastRunAt) : 0 }) };
-        }
+        const lastRunAtStr = await kvGet('meta:lastRunAt');
+        const lastRunAt = lastRunAtStr ? Number(lastRunAtStr) : 0;
+        return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: Number.isFinite(lastRunAt) ? lastRunAt : 0 }) };
       } catch (_) {}
       const mem = (globalThis.__LAST_RUN_AT__ ? Number(globalThis.__LAST_RUN_AT__) : 0) || 0;
       return { statusCode: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ lastRunAt: mem }) };
@@ -248,12 +251,10 @@ exports.handler = async (event) => {
 
   // Coalesce overlapping invocations: skip if a run occurred <60s ago
   try {
-    if (netlifyBlobs && typeof netlifyBlobs.getStore === 'function') {
-      const lastRun = await kvGet('meta:lastRunAt');
-      const lastTs = lastRun ? Number(lastRun) : 0;
-      if (Number.isFinite(lastTs) && (Date.now() - lastTs) < 60 * 1000) {
-        return { statusCode: 200, body: 'ok-coalesced' };
-      }
+    const lastRun = await kvGet('meta:lastRunAt');
+    const lastTs = lastRun ? Number(lastRun) : 0;
+    if (Number.isFinite(lastTs) && (Date.now() - lastTs) < 60 * 1000) {
+      return { statusCode: 200, body: 'ok-coalesced' };
     }
   } catch (_) {}
   const services = [
