@@ -138,12 +138,17 @@ async function getPersistedState(key) {
         lastNotifiedResolveAt: parsed.lastNotifiedResolveAt || null,
         lastNotifiedStartKey: parsed.lastNotifiedStartKey || null,
         lastNotifiedResolveKey: parsed.lastNotifiedResolveKey || null,
+        // Multi-incident support (Statuspage): arrays of notified keys and metadata maps
+        notifiedStartKeys: Array.isArray(parsed.notifiedStartKeys) ? parsed.notifiedStartKeys : [],
+        notifiedResolveKeys: Array.isArray(parsed.notifiedResolveKeys) ? parsed.notifiedResolveKeys : [],
+        startKeyToStartedAt: (parsed.startKeyToStartedAt && typeof parsed.startKeyToStartedAt === 'object') ? parsed.startKeyToStartedAt : {},
+        startKeyToTitle: (parsed.startKeyToTitle && typeof parsed.startKeyToTitle === 'object') ? parsed.startKeyToTitle : {},
       };
     } catch (_) {
-      return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
+      return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null, notifiedStartKeys: [], notifiedResolveKeys: [], startKeyToStartedAt: {}, startKeyToTitle: {} };
     }
   } catch (_) {}
-  return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null };
+  return { state: 'unknown', startedAt: null, startKey: null, incidentId: null, lastNonIncidentTs: 0, lastNotifiedStartAt: null, lastNotifiedResolveAt: null, lastNotifiedStartKey: null, lastNotifiedResolveKey: null, notifiedStartKeys: [], notifiedResolveKeys: [], startKeyToStartedAt: {}, startKeyToTitle: {} };
 }
 
 async function setPersistedState(key, value) {
@@ -285,6 +290,103 @@ exports.handler = async (event) => {
   for (const svc of services) {
     try {
       const raw = await getJson(svc.url);
+      // Special handling for Statuspage-backed services to support multiple concurrent incidents
+      if (svc.type === 'statuspage') {
+        const summary = raw || {};
+        const incidents = Array.isArray(summary.incidents) ? summary.incidents : [];
+        const active = incidents.filter((i) => i && String(i.status || '').toLowerCase() !== 'resolved');
+        const baseKey = getDedupeKey(svc);
+        const persisted = await getPersistedState(baseKey);
+        const nowActiveKeys = new Set();
+        const suppressWindowMs = 120 * 1000;
+
+        // Send start notifications for any new active incidents
+        for (const inc of active) {
+          const incidentId = inc && inc.id ? String(inc.id) : null;
+          const started = inc && (inc.started_at || inc.created_at || inc.startedAt);
+          const startedMs = started ? Date.parse(started) : NaN;
+          const startKey = Number.isFinite(startedMs) ? `ts:${startedMs}` : (incidentId ? `id:${incidentId}` : null);
+          if (!startKey) continue;
+          nowActiveKeys.add(startKey);
+          const alreadyNotified = Array.isArray(persisted.notifiedStartKeys) && persisted.notifiedStartKeys.includes(startKey);
+          if (!alreadyNotified) {
+            const lastTs = await getLastNotifiedTs(`${baseKey}:start:${startKey}`);
+            const sigKey = `${baseKey}:start:${startKey}`;
+            const sigVal = `start:${startKey}`;
+            const lastSig = await getLastSignature(sigKey);
+            if ((lastSig !== sigVal) && (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs)) {
+              await setLastNotifiedTs(`${baseKey}:start:${startKey}`, Date.now());
+              await setLastSignature(sigKey, sigVal);
+              const emoji = String(inc.impact || '').toLowerCase() === 'critical' ? ':red_circle:' : ':large_yellow_circle:';
+              const title = inc.name || inc.title || 'Incident detected';
+              const startedStr = started ? new Date(started).toLocaleString() : new Date().toLocaleString();
+              const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+              await notifySlackBackground(`${emoji} ${svc.name}: ${title}\nStarted: ${startedStr}${link}`);
+              const newNotified = (persisted.notifiedStartKeys || []).concat([startKey]);
+              const startKeyToStartedAt = Object.assign({}, persisted.startKeyToStartedAt || {});
+              const startKeyToTitle = Object.assign({}, persisted.startKeyToTitle || {});
+              startKeyToStartedAt[startKey] = started || new Date().toISOString();
+              startKeyToTitle[startKey] = title;
+              await setPersistedState(baseKey, {
+                state: 'incident',
+                startedAt: started || null,
+                startKey: startKey,
+                lastNotifiedStartAt: started || null,
+                lastNotifiedStartKey: startKey,
+                lastNotifiedResolveAt: persisted.lastNotifiedResolveAt || null,
+                lastNotifiedResolveKey: persisted.lastNotifiedResolveKey || null,
+                lastNonIncidentTs: 0,
+                incidentId: incidentId || null,
+                notifiedStartKeys: newNotified,
+                notifiedResolveKeys: Array.isArray(persisted.notifiedResolveKeys) ? persisted.notifiedResolveKeys : [],
+                startKeyToStartedAt,
+                startKeyToTitle,
+              });
+            }
+          }
+        }
+
+        // Send resolve notifications for incidents that were active before but not anymore
+        const previouslyNotified = Array.isArray(persisted.notifiedStartKeys) ? persisted.notifiedStartKeys : [];
+        const alreadyResolved = new Set(Array.isArray(persisted.notifiedResolveKeys) ? persisted.notifiedResolveKeys : []);
+        const stillActiveKeys = nowActiveKeys;
+        for (const startKey of previouslyNotified) {
+          if (stillActiveKeys.has(startKey) || alreadyResolved.has(startKey)) continue;
+          const lastTs = await getLastNotifiedTs(`${baseKey}:resolve:${startKey}`);
+          const sigKey = `${baseKey}:resolve:${startKey}`;
+          const sigVal = `resolve:${startKey}`;
+          const lastSig = await getLastSignature(sigKey);
+          if ((lastSig !== sigVal) && (!Number.isFinite(lastTs) || (Date.now() - lastTs) >= suppressWindowMs)) {
+            await setLastNotifiedTs(`${baseKey}:resolve:${startKey}`, Date.now());
+            await setLastSignature(sigKey, sigVal);
+            const startedIso = (persisted.startKeyToStartedAt || {})[startKey] || null;
+            const startedStr = startedIso ? new Date(startedIso).toLocaleString() : '';
+            const endedStr = new Date().toLocaleString();
+            const title = (persisted.startKeyToTitle || {})[startKey] || 'Incident';
+            const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
+            await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal — ${title}\nStarted: ${startedStr}\nResolved: ${endedStr}${link}`);
+            const newResolved = Array.from(alreadyResolved);
+            newResolved.push(startKey);
+            const stateNow = newResolved.length >= previouslyNotified.length ? 'operational' : 'incident';
+            await setPersistedState(baseKey, {
+              state: stateNow,
+              startedAt: stateNow === 'operational' ? null : (persisted.startedAt || null),
+              startKey: stateNow === 'operational' ? null : (persisted.startKey || null),
+              lastNotifiedResolveAt: startedIso || null,
+              lastNotifiedResolveKey: startKey,
+              lastNonIncidentTs: stateNow === 'operational' ? Date.now() : (persisted.lastNonIncidentTs || 0),
+              incidentId: null,
+              notifiedStartKeys: previouslyNotified,
+              notifiedResolveKeys: newResolved,
+              startKeyToStartedAt: Object.assign({}, persisted.startKeyToStartedAt || {}),
+              startKeyToTitle: Object.assign({}, persisted.startKeyToTitle || {}),
+            });
+          }
+        }
+        // Skip default single-incident logic for Statuspage services
+        continue;
+      }
+
       const current = svc.type === 'local' ? normalizeFromLocal(raw) : normalizeFromStatuspage(raw);
       // Use a stable key per service; compute a stable incident key (incidentId or startedAt ms)
       const baseKey = getDedupeKey(svc);
