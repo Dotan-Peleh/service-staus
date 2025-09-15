@@ -36,7 +36,7 @@ function httpGetFollow(rawUrl, headers = {}, maxRedirects = 5) {
 function json(status, obj) {
   return {
     statusCode: status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache' },
     body: JSON.stringify(obj),
   };
 }
