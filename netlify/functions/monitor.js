@@ -441,8 +441,8 @@ exports.handler = async (event) => {
         const startWasNotified = Boolean(persisted.lastNotifiedStartKey && startKey && persisted.lastNotifiedStartKey === startKey);
         const resolveNotSent = !persisted.lastNotifiedResolveKey || (startKey && persisted.lastNotifiedResolveKey !== startKey);
 
-        // If we previously sent a start for this incident and haven't sent resolve yet, send resolve now
-        if (hasStarted && startWasNotified && resolveNotSent) {
+        // If we observed an incident (even if start wasn't notified earlier) and haven't sent resolve yet, send resolve now
+        if (hasStarted && resolveNotSent) {
           const suppressWindowMs = 120 * 1000;
           const lastTs = await getLastNotifiedTs(`${baseKey}:resolve`);
           const sigKey = `${baseKey}:resolve`;
