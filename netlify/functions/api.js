@@ -58,7 +58,7 @@ exports.handler = async (event, context) => {
     if (event.httpMethod === 'OPTIONS' && (path === '/api/notify/slack' || path === '/api/notify/enabled')) {
       return { statusCode: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' }, body: '' };
     }
-    if (path === '/api/apple/status') {
+    if (path === '/api/apple/status' || path === '/api/apple/debug') {
       // Apple System Status (JSON then JS fallback)
       let body = await fetchText('https://www.apple.com/support/systemstatus/data/system_status_en_US.json');
       let data;
@@ -71,6 +71,7 @@ exports.handler = async (event, context) => {
       const target = new Set(['app store','app store connect']);
       let hasIncident = false; let detail = '';
       const now = Date.now();
+      const inspected = [];
       for (const svc of data.services) {
         const name = String(svc.serviceName || '').toLowerCase();
         if (!target.has(name)) continue;
@@ -79,11 +80,14 @@ exports.handler = async (event, context) => {
         const active = events.find((e) => {
           const status = String(e.eventStatus || '').toLowerCase();
           const msg = String(e.message || e.userFacingStatus || '').toLowerCase();
+          const type = String(e.eventType || e.eventTypeId || '').toLowerCase();
           const startMs = e.startDate ? Date.parse(e.startDate) : NaN;
           const started = Number.isFinite(startMs) ? (startMs <= now + 60 * 1000) : true; // allow small skew
           const hasEnded = Boolean(e.endDate);
           const isResolvedLike = /resolved|completed|restored|normal/.test(status) || /resolved|completed|restored|normal/.test(msg);
-          const isScheduledMaintenance = /maintenance/.test(status) && (!started || /scheduled/.test(status));
+          const isMaintenanceType = /maint/.test(type) || /maintenance/.test(status) || /maintenance/.test(msg);
+          const isScheduledMaintenance = isMaintenanceType && (!started || /scheduled/.test(status) || /scheduled/.test(msg));
+          inspected.push({ status, msg, type, startDate: e.startDate || null, endDate: e.endDate || null, started, hasEnded, isResolvedLike, isMaintenanceType, isScheduledMaintenance });
           if (isScheduledMaintenance) return false;
           if (!started) return false;
           if (isResolvedLike) return false;
@@ -97,9 +101,12 @@ exports.handler = async (event, context) => {
         try {
           const html = await fetchText('https://www.apple.com/support/systemstatus/');
           const plain = html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-          const allOk = /all services are operating normally|all services operating normally|no issues reported|no known issues/i.test(plain);
+          const allOk = /all services are operating normally|all services operating normally|all systems operational|no issues reported|no known issues/i.test(plain);
           if (allOk) return json(200, { state: 'operational' });
         } catch (_) {}
+      }
+      if (path === '/api/apple/debug') {
+        return json(200, { decision: hasIncident ? 'incident' : 'operational', inspected });
       }
       return json(200, hasIncident ? { state: 'incident', severity: 'minor', title: 'Apple App Store incident', detail } : { state: 'operational' });
     }
