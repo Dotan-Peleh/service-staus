@@ -436,7 +436,8 @@ exports.handler = async (event) => {
 
       // Returning to operational: notify once per incident
       if (current.state === 'operational') {
-        const hasStarted = Boolean(persisted.startedAt || persisted.startKey);
+        // Consider it a previously observed incident even if timestamps are missing (edge cases)
+        const hasStarted = Boolean(persisted.startedAt || persisted.startKey || persisted.state === 'incident');
         const startKey = persisted.startKey || (persisted.startedAt ? `ts:${Date.parse(persisted.startedAt)}` : null);
         const startWasNotified = Boolean(persisted.lastNotifiedStartKey && startKey && persisted.lastNotifiedStartKey === startKey);
         const resolveNotSent = !persisted.lastNotifiedResolveKey || (startKey && persisted.lastNotifiedResolveKey !== startKey);
@@ -456,7 +457,15 @@ exports.handler = async (event) => {
             const link = svc.statusUrl ? `\nStatus: ${svc.statusUrl}` : '';
             await notifySlackBackground(`:white_check_mark: ${svc.name} back to normal\nStarted: ${startedStr}\nResolved: ${ended}${link}`);
             last[svc.name] = { state: 'operational', startedAt: null };
-            await setPersistedState(baseKey, { state: 'operational', startedAt: null, startKey: null, lastNotifiedResolveAt: persisted.startedAt || null, lastNotifiedResolveKey: startKey || null, lastNonIncidentTs: nowTs, incidentId: null });
+            await setPersistedState(baseKey, {
+              state: 'operational',
+              startedAt: null,
+              startKey: null,
+              lastNotifiedResolveAt: persisted.startedAt || null,
+              lastNotifiedResolveKey: startKey || persisted.lastNotifiedStartKey || 'resolved',
+              lastNonIncidentTs: nowTs,
+              incidentId: null,
+            });
           }
           return { statusCode: 200, body: 'ok' };
         }
