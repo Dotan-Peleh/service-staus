@@ -1,0 +1,51 @@
+═══════════════════════════════════════════════════════════
+🚨 YOUR LIVE WEBHOOK URL FOR STATUSGATOR
+═══════════════════════════════════════════════════════════
+
+https://thermochemical-flexuously-callen.ngrok-free.dev/api/webhooks/statusgator?key=https%3A%2F%2Fdeveloper.apple.com%2Fsystem-status%2F
+
+═══════════════════════════════════════════════════════════
+📋 SETUP INSTRUCTIONS:
+═══════════════════════════════════════════════════════════
+
+1. Go to: https://statusgator.com/
+2. Sign up (free, no credit card needed)
+3. Click "Add Service"
+4. Enter: https://developer.apple.com/system-status/
+5. Go to Settings → Integrations → Webhooks
+6. Click "Add Webhook"
+7. Paste the URL above
+8. Click "Test Webhook" to verify
+
+═══════════════════════════════════════════════════════════
+🧪 TEST IT NOW:
+═══════════════════════════════════════════════════════════
+
+Run this to simulate an Apple incident:
+
+curl -X POST 'https://thermochemical-flexuously-callen.ngrok-free.dev/api/webhooks/statusgator?key=https%3A%2F%2Fdeveloper.apple.com%2Fsystem-status%2F' \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"major_outage","title":"App Store - In-App Purchases","current_status":"down"}'
+
+Then check: http://localhost:5173/ and refresh the page!
+
+═══════════════════════════════════════════════════════════
+⏱️  IMPORTANT:
+═══════════════════════════════════════════════════════════
+
+This ngrok URL is temporary and will change when you restart.
+
+For PRODUCTION (permanent):
+- Deploy to Netlify first
+- Use: https://YOUR-SITE.netlify.app/.netlify/functions/api/webhooks/statusgator?key=https%3A%2F%2Fdeveloper.apple.com%2Fsystem-status%2F
+
+═══════════════════════════════════════════════════════════
+🔍 MONITOR:
+═══════════════════════════════════════════════════════════
+
+ngrok web interface: http://localhost:4040
+Server logs: tail -f server.log
+ngrok is running in background (keep terminal open)
+
+═══════════════════════════════════════════════════════════
+
