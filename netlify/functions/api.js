@@ -517,6 +517,82 @@ exports.handler = async (event, context) => {
       }
     }
 
+    // StatusGator webhook handler with Slack integration
+    if (path === '/api/webhooks/statusgator' && event.httpMethod === 'POST') {
+      try {
+        const params = event.queryStringParameters || {};
+        const key = params.key;
+        if (!key) return json(400, { error: 'Missing key parameter' });
+        
+        const payload = event.body ? JSON.parse(event.body) : {};
+        const status = (payload.status || payload.current_status || '').toLowerCase();
+        
+        // Normalize incident data
+        let result = { state: 'unknown', source: 'webhook-statusgator' };
+        let shouldNotify = false;
+        let notificationMessage = '';
+        
+        if (['up','operational','ok'].includes(status)) {
+          result = { state: 'operational', source: 'webhook-statusgator' };
+          shouldNotify = true;
+          const serviceName = key.includes('apple') ? 'Apple Developer Services' : 'Service';
+          const title = payload.title || 'Service';
+          const ended = new Date().toLocaleString();
+          const link = key ? `\nStatus: ${key}` : '';
+          notificationMessage = `:white_check_mark: ${serviceName} back to normal — ${title}\nResolved: ${ended}${link}`;
+        } else if (status) {
+          const criticalWords = ['down','outage','major','critical'];
+          const severity = criticalWords.some(w => status.includes(w)) ? 'critical' : 'minor';
+          const title = payload.title || payload.summary || 'Incident';
+          result = { state: 'incident', severity, title, source: 'webhook-statusgator' };
+          shouldNotify = true;
+          const serviceName = key.includes('apple') ? 'Apple Developer Services' : 'Service';
+          const emoji = severity === 'critical' ? ':red_circle:' : ':large_yellow_circle:';
+          const started = new Date().toLocaleString();
+          const link = key ? `\nStatus: ${key}` : '';
+          const detail = payload.summary ? `\n${payload.summary}` : '';
+          notificationMessage = `${emoji} ${serviceName}: ${title}\nStarted: ${started}${detail}${link}`;
+        }
+        
+        // Send Slack notification
+        if (shouldNotify && notificationMessage) {
+          const webhook = process.env.SLACK_WEBHOOK_URL || '';
+          const botToken = process.env.SLACK_BOT_TOKEN || '';
+          const channel = process.env.SLACK_CHANNEL || '';
+          
+          if (webhook) {
+            try {
+              const u = new URL(webhook);
+              const lib = u.protocol === 'http:' ? http : https;
+              await new Promise((resolve) => {
+                const req = lib.request(u, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'ServiceStatusDashboard/1.0' } }, (r) => {
+                  r.on('data', ()=>{}); r.on('end', resolve);
+                });
+                req.on('error', resolve);
+                req.end(JSON.stringify({ text: notificationMessage }));
+              });
+            } catch (_) {}
+          } else if (botToken && channel) {
+            try {
+              const u = new URL('https://slack.com/api/chat.postMessage');
+              const lib = u.protocol === 'http:' ? http : https;
+              await new Promise((resolve) => {
+                const req = lib.request(u, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${botToken}`, 'User-Agent': 'ServiceStatusDashboard/1.0' } }, (r) => {
+                  r.on('data', ()=>{}); r.on('end', resolve);
+                });
+                req.on('error', resolve);
+                req.end(JSON.stringify({ channel, text: notificationMessage }));
+              });
+            } catch (_) {}
+          }
+        }
+        
+        return { statusCode: 204, headers: { 'Access-Control-Allow-Origin': '*' }, body: '' };
+      } catch {
+        return json(400, { error: 'Bad Request' });
+      }
+    }
+
     return json(404, { error: 'Not found' });
   } catch (e) {
     return json(500, { error: 'Server error' });

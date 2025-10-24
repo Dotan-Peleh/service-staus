@@ -433,16 +433,41 @@ function webhookStatusgator(req, res) {
   req.on('end', () => {
     let payload = {};
     try { payload = JSON.parse(raw || '{}'); } catch (_) {}
+    
+    // Get previous state to detect transitions
+    const previous = statusStore[key] || { state: 'unknown' };
+    
     // StatusGator payloads vary; normalize common fields
     const status = (payload.status || payload.current_status || '').toLowerCase();
     let result = { state: 'unknown', source: 'webhook-statusgator' };
+    
     if (['up','operational','ok'].includes(status)) {
       result = { state: 'operational', source: 'webhook-statusgator' };
+      
+      // Send resolution notification if transitioning from incident
+      if (previous.state === 'incident' && previous.title) {
+        const serviceName = key.includes('apple') ? 'Apple Developer Services' : 'Service';
+        const ended = new Date().toLocaleString();
+        const link = key ? `\nStatus: ${key}` : '';
+        notifySlackBackground(`:white_check_mark: ${serviceName} back to normal — ${previous.title}\nResolved: ${ended}${link}`);
+      }
     } else if (status) {
       const criticalWords = ['down','outage','major','critical'];
       const severity = criticalWords.some(w => status.includes(w)) ? 'critical' : 'minor';
-      result = { state: 'incident', severity, title: payload.title || payload.summary || 'Incident', source: 'webhook-statusgator' };
+      const title = payload.title || payload.summary || 'Incident';
+      result = { state: 'incident', severity, title, source: 'webhook-statusgator' };
+      
+      // Send incident notification if this is a new incident or severity changed
+      if (previous.state !== 'incident' || previous.title !== title || previous.severity !== severity) {
+        const serviceName = key.includes('apple') ? 'Apple Developer Services' : 'Service';
+        const emoji = severity === 'critical' ? ':red_circle:' : ':large_yellow_circle:';
+        const started = new Date().toLocaleString();
+        const link = key ? `\nStatus: ${key}` : '';
+        const detail = payload.summary ? `\n${payload.summary}` : '';
+        notifySlackBackground(`${emoji} ${serviceName}: ${title}\nStarted: ${started}${detail}${link}`);
+      }
     }
+    
     updateStore(key, result);
     return send(res, 204, '');
   });
