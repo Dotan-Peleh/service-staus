@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Services Status Dashboard</title>
+    <link rel="icon" href="/favicon.ico">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #2d3748;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header .subtitle {
+            color: #718096;
+            font-size: 14px;
+        }
+
+        .status-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+        }
+
+        .summary-card .count {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .summary-card .label {
+            color: #718096;
+            font-size: 14px;
+        }
+
+        .summary-card.operational .count { color: #48bb78; }
+        .summary-card.issues .count { color: #f56565; }
+        .summary-card.checking .count { color: #ed8936; }
+
+        .category-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+        }
+
+        .category-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .category-title {
+            font-size: 20px;
+            color: #2d3748;
+            font-weight: 600;
+        }
+
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+
+        .service-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 15px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .service-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .service-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 10px;
+        }
+
+        .service-name {
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 16px;
+        }
+
+        .service-status {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .verification-note {
+            margin-left: 8px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background: #edf2f7;
+            color: #4a5568;
+            font-size: 10px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .status-operational {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .status-issue {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        /* New granular incident severities */
+        .status-critical {
+            background: #fed7d7;
+            color: #7b1e1e;
+        }
+
+        .status-minor {
+            background: #feebc8;
+            color: #7c2d12;
+        }
+
+        .status-checking {
+            background: #feebc8;
+            color: #7c2d12;
+        }
+
+        .status-unknown {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+
+        .service-description {
+            color: #718096;
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+
+        .service-link {
+            display: inline-flex;
+            align-items: center;
+            color: #667eea;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .service-link:hover {
+            color: #5a67d8;
+        }
+
+        .last-checked {
+            color: #a0aec0;
+            font-size: 11px;
+            margin-top: 8px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #5a67d8;
+        }
+
+        .btn:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+        }
+
+        .filter-input {
+            padding: 10px 15px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .notifications {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .notification {
+            background: white;
+            padding: 15px 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            margin-bottom: 10px;
+            min-width: 300px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .notification.error {
+            border-left: 4px solid #f56565;
+        }
+
+        .notification.success {
+            border-left: 4px solid #48bb78;
+        }
+
+        .notification.warning {
+            border-left: 4px solid #ed8936;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #e2e8f0;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .services-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Incident details block */
+        .incident-details {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: #fffaf0;
+            border-left: 4px solid #ed8936;
+            color: #4a5568;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .incident-details.critical {
+            background: #fff5f5;
+            border-left-color: #e53e3e;
+        }
+
+        .incident-title {
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 4px;
+        }
+
+        .incident-eta {
+            color: #a06107;
+        }
+
+        .service-aliases {
+            margin-top: 6px;
+            color: #4a5568;
+            font-size: 12px;
+        }
+
+        .service-messages {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: #f7fafc;
+            border-left: 4px solid #a0aec0;
+            color: #4a5568;
+            font-size: 12px;
+        }
+
+        .service-messages ul {
+            margin-left: 16px;
+            list-style: disc;
+        }
+
+        /* Compact availability bar (recent checks) */
+        .uptime-section {
+            margin-top: 10px;
+        }
+        .uptime-label {
+            color: #4a5568;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        .uptime-bar {
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: 1fr;
+            gap: 2px;
+            align-items: center;
+        }
+        .uptime-segment {
+            height: 8px;
+            border-radius: 2px;
+            background: #e2e8f0;
+        }
+        .seg-operational { background: #48bb78; }
+        .seg-minor { background: #ed8936; }
+        .seg-critical { background: #f56565; }
+        .seg-unknown { background: #a0aec0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎮  Services Status Dashboard</h1>
+            <div class="subtitle">Monitoring all critical services for mobile app operations · Uses official APIs only. Services without APIs show Manual Review.</div>
+        </div>
+
+        <div class="status-summary">
+            <div class="summary-card operational">
+                <div class="count" id="operational-count">0</div>
+                <div class="label">Operational</div>
+            </div>
+            <div class="summary-card issues">
+                <div class="count" id="issues-count">0</div>
+                <div class="label">Issues</div>
+            </div>
+            <div class="summary-card checking">
+                <div class="count" id="checking-count">0</div>
+                <div class="label">Checking</div>
+            </div>
+        </div>
+
+        <div class="category-section" id="issues-summary" style="display:none">
+            <div class="category-header">
+                <h2 class="category-title">Active Incidents</h2>
+                <div id="issues-summary-count" class="service-status status-issue">0</div>
+            </div>
+            <div id="issues-summary-list"></div>
+        </div>
+
+        <div class="controls">
+            <input type="text" class="filter-input" id="search-input" placeholder="Search services...">
+            <button class="btn" id="refresh-btn">🔄 Refresh All</button>
+            <button class="btn" id="auto-refresh-btn">Auto Refresh: OFF</button>
+        </div>
+
+        <div id="categories-container"></div>
+    </div>
+
+    <div class="notifications" id="notifications"></div>
+
+    <script>
+        const services = {
+            "App Distribution Platforms": [
+                {
+                    name: "Google Play Store",
+                    description: "Android app distribution, in-app purchases, Play Services",
+                    statusUrl: "https://status.play.google.com/",
+                    checkUrl: "/api/google/play-status"
+                },
+                {
+                    name: "Apple App Store",
+                    description: "iOS app distribution, in-app purchases",
+                    statusUrl: "https://developer.apple.com/system-status/",
+                    checkUrl: "/api/apple/status"
+                }
+            ],
+            "Platform Services": [
+                {
+                    name: "Google Play Services",
+                    description: "Authentication, achievements, leaderboards, cloud save",
+                    statusUrl: "https://status.play.google.com/",
+                    checkUrl: "/api/google/play-status"
+                },
+                {
+                    name: "Apple Game Center",
+                    description: "Achievements, leaderboards, multiplayer",
+                    statusUrl: "https://developer.apple.com/system-status/",
+                    checkUrl: null
+                }
+            ],
+            "Analytics & Attribution": [
+                {
+                    name: "Firebase",
+                    description: "Analytics, Crashlytics, Remote Config, Cloud Messaging",
+                    statusUrl: "https://status.firebase.google.com/",
+                    checkUrl: "/api/firebase/status",
+                    messages: [
+                        {
+                            text: "On August 25th, 2025, Firebase Dynamic Links will shut down. Some Firebase Authentication email links will stop working.",
+                            url: "https://firebase.google.com/support/dynamic-links-faq#impacts-on-email-link-authentication"
+                        }
+                    ]
+                },
+                {
+                    name: "Mixpanel",
+                    description: "User analytics and event tracking",
+                    statusUrl: "https://status.mixpanel.com/",
+                    checkUrl: "/api/mixpanel/status"
+                },
+                {
+                    name: "Singular",
+                    description: "Mobile attribution and analytics",
+                    statusUrl: "https://status.singular.net/",
+                    checkUrl: "/api/statuspage?base=https://status.singular.net"
+                }
+            ],
+            "Error Tracking & Monitoring": [
+                {
+                    name: "Sentry",
+                    description: "Error tracking and performance monitoring",
+                    statusUrl: "https://status.sentry.io/",
+                    checkUrl: "/api/statuspage?base=https://status.sentry.io"
+                },
+                {
+                    name: "Firebase Crashlytics",
+                    description: "Crash reporting",
+                    statusUrl: "https://status.firebase.google.com/",
+                    checkUrl: null
+                }
+            ],
+            "Advertising & Monetization": [
+                {
+                    name: "Facebook Audience Network",
+                    description: "Mobile advertising (Meta)",
+                    statusUrl: "https://metastatus.com/",
+                    checkUrl: "/api/facebook/status"
+                },
+                {
+                    name: "Google AdMob",
+                    description: "Mobile advertising",
+                    statusUrl: "https://status.cloud.google.com/",
+                    checkUrl: "/api/google/cloud-status"
+                }
+            ],
+            "Backend & Infrastructure": [
+                {
+                    name: "Realm Database",
+                    description: "Local database with sync capabilities (MongoDB)",
+                    statusUrl: "https://status.mongodb.com/",
+                    checkUrl: "/api/statuspage?base=https://status.mongodb.com"
+                }
+            ],
+            "Social & Platform Services": [
+                {
+                    name: "Facebook SDK",
+                    description: "Login, Share, App Links, Gaming Services",
+                    statusUrl: "https://metastatus.com/",
+                    checkUrl: null
+                }
+            ],
+            "Payment Processing": [
+            ],
+            "Collaboration & Productivity": [
+                {
+                    name: "Slack",
+                    description: "Team messaging and collaboration",
+                    statusUrl: "https://status.slack.com/",
+                    checkUrl: "/api/slack/status"
+                },
+                {
+                    name: "Notion",
+                    description: "Docs, wiki, and project management",
+                    statusUrl: "https://www.notion-status.com/",
+                    checkUrl: "/api/statuspage?base=https://www.notion-status.com"
+                },
+                {
+                    name: "Figma",
+                    description: "Design and prototyping platform",
+                    statusUrl: "https://status.figma.com/",
+                    checkUrl: "/api/statuspage?base=https://status.figma.com"
+                },
+                {
+                    name: "Jira Software",
+                    description: "Issue tracking and agile project management",
+                    statusUrl: "https://jira-software.status.atlassian.com/",
+                    checkUrl: "/api/statuspage?base=https://jira-software.status.atlassian.com"
+                }
+            ]
+        };
+
+        let serviceStatuses = {};
+        let autoRefreshInterval = null;
+        let isAutoRefresh = false;
+        const incidentDetails = {};
+        const aggregates = {};
+        const uptimeHistory = {};
+        const MAX_UPTIME_SEGMENTS = 60;
+        const FETCH_TIMEOUT_MS = 7000;
+
+        function initDashboard() {
+            renderCategories();
+            checkAllStatuses();
+            setupEventListeners();
+        }
+
+        function renderCategories() {
+            const container = document.getElementById('categories-container');
+            container.innerHTML = '';
+
+            Object.entries(services).forEach(([category, serviceList]) => {
+                const categorySection = document.createElement('div');
+                categorySection.className = 'category-section';
+                
+                const categoryHeader = document.createElement('div');
+                categoryHeader.className = 'category-header';
+                
+                const categoryTitle = document.createElement('h2');
+                categoryTitle.className = 'category-title';
+                categoryTitle.textContent = category;
+                
+                categoryHeader.appendChild(categoryTitle);
+                categorySection.appendChild(categoryHeader);
+                
+                const servicesGrid = document.createElement('div');
+                servicesGrid.className = 'services-grid';
+                
+                serviceList.forEach(service => {
+                    const serviceCard = createServiceCard(service);
+                    if (serviceCard) servicesGrid.appendChild(serviceCard);
+                });
+                
+                if (servicesGrid.childElementCount > 0) {
+                    categorySection.appendChild(servicesGrid);
+                    container.appendChild(categorySection);
+                }
+            });
+        }
+
+        function getServiceKey(service) {
+            return service.statusUrl || service.checkUrl || service.name;
+        }
+
+        function createServiceCard(service) {
+            const aggregateKey = getServiceKey(service);
+            if (aggregateKey && aggregates[aggregateKey]) {
+                const existing = aggregates[aggregateKey];
+                if (!existing.names.includes(service.name)) existing.names.push(service.name);
+                const aliasEl = document.getElementById(`aliases-${existing.idSafe}`);
+                if (aliasEl) {
+                    const others = existing.names.filter(n => n !== existing.primaryName);
+                    aliasEl.textContent = others.length > 0 ? `Also covers: ${others.join(', ')}` : '';
+                    aliasEl.style.display = others.length > 0 ? 'block' : 'none';
+                }
+                if (existing.element) {
+                    const othersLower = existing.names.filter(n => n !== existing.primaryName).map(n => n.toLowerCase()).join(',');
+                    existing.element.dataset.aliases = othersLower;
+                }
+                return null;
+            }
+            const card = document.createElement('div');
+            card.className = 'service-card';
+            card.dataset.serviceName = service.name.toLowerCase();
+            card.dataset.aliases = '';
+            
+            const header = document.createElement('div');
+            header.className = 'service-header';
+            
+            const name = document.createElement('div');
+            name.className = 'service-name';
+            name.textContent = service.name;
+            
+            const status = document.createElement('span');
+            status.className = 'service-status status-checking';
+            status.textContent = 'Checking';
+            status.id = `status-${service.name.replace(/\s+/g, '-')}`;
+            
+            const verify = document.createElement('span');
+            verify.className = 'verification-note';
+            verify.textContent = 'Unverified';
+            verify.id = `verify-${service.name.replace(/\s+/g, '-')}`;
+            verify.style.display = 'none';
+            
+            header.appendChild(name);
+            header.appendChild(status);
+            header.appendChild(verify);
+            
+            const description = document.createElement('div');
+            description.className = 'service-description';
+            description.textContent = service.description;
+            
+            const link = document.createElement('a');
+            link.className = 'service-link';
+            link.href = service.statusUrl;
+            link.target = '_blank';
+            link.textContent = 'View Status Page →';
+
+            const aliases = document.createElement('div');
+            aliases.className = 'service-aliases';
+            aliases.id = `aliases-${service.name.replace(/\s+/g, '-')}`;
+            aliases.style.display = 'none';
+            
+            const incident = document.createElement('div');
+            incident.className = 'incident-details';
+            incident.id = `incident-${service.name.replace(/\s+/g, '-')}`;
+            incident.style.display = 'none';
+
+            const uptimeSection = document.createElement('div');
+            uptimeSection.className = 'uptime-section';
+            const uptimeLabel = document.createElement('div');
+            uptimeLabel.className = 'uptime-label';
+            uptimeLabel.textContent = 'Availability (recent checks)';
+            const uptimeBar = document.createElement('div');
+            uptimeBar.className = 'uptime-bar';
+            uptimeBar.id = `uptime-${service.name.replace(/\s+/g, '-')}`;
+            uptimeSection.appendChild(uptimeLabel);
+            uptimeSection.appendChild(uptimeBar);
+
+            const lastChecked = document.createElement('div');
+            lastChecked.className = 'last-checked';
+            lastChecked.id = `last-${service.name.replace(/\s+/g, '-')}`;
+            lastChecked.textContent = 'Last checked: Never';
+            
+            card.appendChild(header);
+            card.appendChild(description);
+            card.appendChild(link);
+            card.appendChild(aliases);
+            card.appendChild(incident);
+            card.appendChild(uptimeSection);
+            card.appendChild(lastChecked);
+            
+            card.addEventListener('click', (e) => {
+                if (!e.target.classList.contains('service-link')) {
+                    checkServiceStatus(service);
+                }
+            });
+            
+            // register aggregate entry
+            if (aggregateKey) {
+                const idSafe = service.name.replace(/\s+/g, '-');
+                aggregates[aggregateKey] = {
+                    element: card,
+                    names: [service.name],
+                    idSafe,
+                    primaryName: service.name,
+                    service
+                };
+                initUptimeBar(idSafe);
+            }
+            return card;
+        }
+
+        async function checkServiceStatus(service) {
+            const idSafe = service.name.replace(/\s+/g, '-');
+            const statusElement = document.getElementById(`status-${idSafe}`);
+            const lastCheckedElement = document.getElementById(`last-${idSafe}`);
+            const incidentElement = document.getElementById(`incident-${idSafe}`);
+            const verifyElement = document.getElementById(`verify-${idSafe}`);
+
+            // Set checking state
+            statusElement.className = 'service-status status-checking';
+            statusElement.innerHTML = '<span class="loading-spinner"></span> Checking';
+
+            const aggregateKey = getServiceKey(service);
+            const previousStatus = serviceStatuses[aggregateKey];
+
+            let result = null;
+            try {
+                // Webhooks disabled: do not use stored state; rely solely on live checks
+
+                const candidates = getCandidateEndpoints(service.checkUrl);
+                if (candidates.length === 0 && service.statusUrl && !(service.checkUrl && service.checkUrl.startsWith('/api/'))) {
+                    // Fallback: scrape the public status page HTML
+                    try {
+                        const response = await fetch(`/api/check-html?url=${encodeURIComponent(service.statusUrl)}`, { cache: 'no-store' });
+                        if (response.ok) {
+                            const data = await response.json();
+                            result = data;
+                        }
+                    } catch (_) {}
+                }
+                for (let i = 0; i < candidates.length; i++) {
+                    try {
+                        const endpoint = candidates[i];
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+                        const isInternal = endpoint.startsWith('/api/');
+                        const urlToFetch = isInternal ? endpoint : `/api/fetch?url=${encodeURIComponent(endpoint)}`;
+                        const response = await fetch(urlToFetch, { cache: 'no-store', signal: controller.signal });
+                        clearTimeout(timeout);
+                        if (response.ok) {
+                            const data = await response.json();
+                            result = parseStatusResponse(data);
+                            if (result) break;
+                        }
+                    } catch (_) {
+                        // try next candidate
+                    }
+                }
+            } catch (_) {
+                // ignore outer errors
+            } finally {
+                // Ensure we always update the UI
+                if (!result && service.statusUrl && !(service.checkUrl && service.checkUrl.startsWith('/api/'))) {
+                    try {
+                        const response = await fetch(`/api/check-html?url=${encodeURIComponent(service.statusUrl)}`, { cache: 'no-store' });
+                        if (response.ok) result = await response.json();
+                    } catch (_) {}
+                }
+                if (!result) result = { state: 'unknown' };
+
+                if (result.state === 'operational') {
+                    serviceStatuses[aggregateKey] = 'operational';
+                    statusElement.className = 'service-status status-operational';
+                    statusElement.textContent = 'Operational';
+                    incidentElement.style.display = 'none';
+                    recordUptime(aggregateKey, 'operational');
+                    // Show last incident info if provided
+                    if (result.lastIncident && (result.lastIncident.title || result.lastIncident.endedAt)) {
+                        incidentElement.style.display = 'block';
+                        incidentElement.classList.remove('critical');
+                        const li = result.lastIncident;
+                        const when = li.endedAt ? `Resolved: ${formatDateTime(li.endedAt)}` : '';
+                        incidentElement.innerHTML = `
+                            <div class="incident-title">Last incident</div>
+                            ${li.title ? `<div class="incident-eta">${li.title}</div>` : ''}
+                            ${when ? `<div class="incident-eta">${when}</div>` : ''}
+                        `;
+                    }
+                    delete incidentDetails[service.name];
+                    if (verifyElement) verifyElement.style.display = 'none';
+                } else if (result.state === 'unknown') {
+                    serviceStatuses[aggregateKey] = 'unknown';
+                    statusElement.className = 'service-status status-unknown';
+                    statusElement.textContent = 'Manual Review';
+                    incidentElement.style.display = 'none';
+                    recordUptime(aggregateKey, 'unknown');
+                    delete incidentDetails[service.name];
+                    if (verifyElement) verifyElement.style.display = 'none';
+                } else {
+                    const severity = result.severity === 'critical' ? 'critical' : 'minor';
+                    serviceStatuses[aggregateKey] = severity;
+                    statusElement.className = `service-status ${severity === 'critical' ? 'status-critical' : 'status-minor'}`;
+                    statusElement.textContent = severity === 'critical' ? 'Critical Incident' : 'Minor Incident';
+
+                    incidentElement.style.display = 'block';
+                    incidentElement.classList.toggle('critical', severity === 'critical');
+                    const displayTitle = severity === 'critical'
+                        ? `${service.name}: ${result.title || 'Service Incident'}`
+                        : (result.title || 'Service Incident');
+                    incidentElement.innerHTML = `
+                        <div class="incident-title">${displayTitle}</div>
+                        ${result.detail ? `<div class="incident-eta">${result.detail}</div>` : ''}
+                        ${result.eta ? `<div class="incident-eta">Planned fix time: ${formatDateTime(result.eta)}</div>` : ''}
+                    `;
+
+                    incidentDetails[service.name] = {
+                        name: service.name,
+                        severity,
+                        title: displayTitle,
+                        eta: result.eta || null,
+                        statusUrl: service.statusUrl
+                    };
+                    recordUptime(aggregateKey, severity);
+
+                    // Always show UI toast on first detection from non-incident
+                    if (previousStatus !== 'critical' && previousStatus !== 'minor') {
+                        showNotification(`⚠️ ${service.name}: ${displayTitle || 'Incident detected'}`.trim(), severity === 'critical' ? 'error' : 'warning');
+                    }
+                    // External notification when transitioning INTO any incident (minor or critical)
+                    if ((severity === 'critical' && previousStatus !== 'critical') ||
+                        (severity === 'minor' && previousStatus !== 'minor')) {
+                        notifySlack(service, incidentDetails[service.name]);
+                    }
+                    if (verifyElement) verifyElement.style.display = 'none';
+                }
+
+                lastCheckedElement.textContent = `Last checked: ${new Date().toLocaleTimeString()}`;
+                updateSummary();
+            }
+        }
+
+        function getCandidateEndpoints(checkUrl) {
+            if (!checkUrl) return [];
+            const endpoints = new Set();
+            // Local normalized backend endpoints: use as-is
+            if (checkUrl.startsWith('/api/')) {
+                endpoints.add(checkUrl);
+                return Array.from(endpoints);
+            }
+            // Slack official API: use as-is
+            if (/status\.slack\.com\/api\//.test(checkUrl)) {
+                endpoints.add(checkUrl);
+                return Array.from(endpoints);
+            }
+            // Statuspage JSON variants: prefer summary.json then status.json
+            if (/\/api\/v\d+\/(summary|status)\.json$/.test(checkUrl)) {
+                const url1 = checkUrl.replace(/status\.json$/, 'summary.json');
+                const url2 = checkUrl.replace(/summary\.json$/, 'status.json');
+                endpoints.add(url1);
+                endpoints.add(url2);
+                return Array.from(endpoints);
+            }
+            endpoints.add(checkUrl);
+            return Array.from(endpoints);
+        }
+
+        function parseStatusResponse(data) {
+            // Pass-through normalized server responses
+            try {
+                if (data && typeof data.state === 'string') {
+                    return {
+                        state: data.state,
+                        severity: data.severity,
+                        title: data.title,
+                        eta: data.eta,
+                        detail: data.detail,
+                        lastIncident: data.lastIncident
+                    };
+                }
+            } catch (_) {}
+            // Handle Atlassian Statuspage summary schema when available
+            try {
+                if (data && (Array.isArray(data.incidents) || Array.isArray(data.scheduled_maintenances))) {
+                    // Prefer active incidents first
+                    const activeIncident = (data.incidents || []).find(i => i.status !== 'resolved');
+                    if (activeIncident) {
+                        const impact = (activeIncident.impact || activeIncident.impact_override || 'minor').toLowerCase();
+                        const severity = impact === 'critical' || impact === 'major' ? 'critical' : 'minor';
+                        return {
+                            state: 'incident',
+                            severity,
+                            title: activeIncident.name || 'Service Incident',
+                            eta: null
+                        };
+                    }
+
+                    // Check ongoing scheduled maintenances as a proxy for ETA
+                    const maint = (data.scheduled_maintenances || []).find(m => m.status !== 'completed');
+                    if (maint) {
+                        const impact = (maint.impact || maint.impact_override || 'minor').toLowerCase();
+                        const severity = impact === 'critical' || impact === 'major' ? 'critical' : 'minor';
+                        const eta = maint.scheduled_until || maint.scheduled_until_utc || maint.scheduled_end || maint.scheduled_end_time || maint.scheduled_for || null;
+                        return {
+                            state: 'incident',
+                            severity,
+                            title: maint.name || 'Scheduled maintenance',
+                            eta
+                        };
+                    }
+
+                    // No incidents/maintenances
+                    return { state: 'operational' };
+                }
+            } catch (_) {}
+
+            // Slack schema: https://status.slack.com/api/v2.0.0/current
+            try {
+                if (data && (Array.isArray(data.active_incidents) || typeof data.status === 'string')) {
+                    if (Array.isArray(data.active_incidents) && data.active_incidents.length > 0) {
+                        const inc = data.active_incidents[0];
+                        const title = inc.title || inc.name || 'Service Incident';
+                        const isCritical = (inc.type && String(inc.type).toLowerCase().includes('outage')) ||
+                                           (title && /outage|down|unavailable/i.test(title));
+                        return {
+                            state: 'incident',
+                            severity: isCritical ? 'critical' : 'minor',
+                            title,
+                            eta: inc.date_end || inc.resolution_time || null
+                        };
+                    }
+                    if (typeof data.status === 'string') {
+                        const s = data.status.toLowerCase();
+                        if (s === 'ok') return { state: 'operational' };
+                        if (s === 'active') return { state: 'incident', severity: 'minor', title: 'Active incident', eta: null };
+                    }
+                }
+            } catch (_) {}
+
+            // Unknown schema: best effort
+            if (data && typeof data.status === 'string') {
+                const normalized = data.status.toLowerCase();
+                if (normalized.includes('degraded') || normalized.includes('partial') || normalized.includes('minor')) {
+                    return { state: 'incident', severity: 'minor', title: 'Degraded performance', eta: null };
+                }
+                if (normalized.includes('major') || normalized.includes('critical') || normalized.includes('outage')) {
+                    return { state: 'incident', severity: 'critical', title: 'Major outage', eta: null };
+                }
+            }
+            return { state: 'operational' };
+        }
+
+        function formatDateTime(dt) {
+            try {
+                const d = new Date(dt);
+                if (!isNaN(d)) return d.toLocaleString();
+            } catch (_) {}
+            return String(dt);
+        }
+
+        function checkAllStatuses() {
+            Object.values(aggregates).forEach(entry => {
+                checkServiceStatus(entry.service);
+            });
+        }
+
+        function updateSummary() {
+            const keys = Object.keys(aggregates);
+            const statuses = keys.map(k => serviceStatuses[k]).filter(Boolean);
+            const operational = statuses.filter(s => s === 'operational').length;
+            const issues = statuses.filter(s => s === 'critical' || s === 'minor' || s === 'issue').length;
+            const checking = Math.max(keys.length - statuses.length, 0);
+
+            document.getElementById('operational-count').textContent = operational;
+            document.getElementById('issues-count').textContent = issues;
+            document.getElementById('checking-count').textContent = checking;
+
+            updateIssuesSummary();
+        }
+
+        function initUptimeBar(idSafe) {
+            const bar = document.getElementById(`uptime-${idSafe}`);
+            if (!bar) return;
+            bar.innerHTML = '';
+            for (let i = 0; i < MAX_UPTIME_SEGMENTS; i++) {
+                const seg = document.createElement('div');
+                seg.className = 'uptime-segment seg-operational';
+                bar.appendChild(seg);
+            }
+        }
+
+        function recordUptime(aggregateKey, state) {
+            if (!uptimeHistory[aggregateKey]) uptimeHistory[aggregateKey] = [];
+            uptimeHistory[aggregateKey].push(state);
+            if (uptimeHistory[aggregateKey].length > MAX_UPTIME_SEGMENTS) uptimeHistory[aggregateKey].shift();
+            const entry = aggregates[aggregateKey];
+            if (entry) renderUptimeBar(entry.idSafe, uptimeHistory[aggregateKey]);
+        }
+
+        function renderUptimeBar(idSafe, history) {
+            const bar = document.getElementById(`uptime-${idSafe}`);
+            if (!bar) return;
+            bar.innerHTML = '';
+            const start = Math.max(0, history.length - MAX_UPTIME_SEGMENTS);
+            for (let i = start; i < history.length; i++) {
+                const s = history[i];
+                const seg = document.createElement('div');
+                let cls = 'seg-unknown';
+                if (s === 'operational') cls = 'seg-operational';
+                else if (s === 'minor') cls = 'seg-minor';
+                else if (s === 'critical') cls = 'seg-critical';
+                seg.className = `uptime-segment ${cls}`;
+                bar.appendChild(seg);
+            }
+            for (let i = history.length; i < MAX_UPTIME_SEGMENTS; i++) {
+                const seg = document.createElement('div');
+                seg.className = 'uptime-segment seg-operational';
+                bar.appendChild(seg);
+            }
+        }
+
+        function updateIssuesSummary() {
+            const container = document.getElementById('issues-summary');
+            const list = document.getElementById('issues-summary-list');
+            const items = Object.values(incidentDetails);
+            const countEl = document.getElementById('issues-summary-count');
+
+            countEl.textContent = items.length;
+            if (items.length === 0) {
+                container.style.display = 'none';
+                list.innerHTML = '';
+                return;
+            }
+
+            container.style.display = 'block';
+            items.sort((a, b) => (a.severity === 'critical' ? -1 : 1) - (b.severity === 'critical' ? -1 : 1));
+            list.innerHTML = items.map(item => `
+                <div class="incident-details ${item.severity === 'critical' ? 'critical' : ''}">
+                    <div class="incident-title">${item.name}: ${item.title}</div>
+                    ${item.eta ? `<div class="incident-eta">Planned fix time: ${formatDateTime(item.eta)}</div>` : ''}
+                    ${item.statusUrl ? `<a href="${item.statusUrl}" target="_blank" class="service-link">View Status Page →</a>` : ''}
+                </div>
+            `).join('');
+        }
+
+        async function notifySlack(service, details) {
+            // Disabled client-side Slack notifications to avoid alerts on page visits.
+            // Notifications are sent by backend monitors only.
+            return;
+        }
+
+        function setupEventListeners() {
+            document.getElementById('refresh-btn').addEventListener('click', () => {
+                checkAllStatuses();
+                showNotification('🔄 Refreshing all service statuses...', 'success');
+            });
+            
+            document.getElementById('auto-refresh-btn').addEventListener('click', toggleAutoRefresh);
+            
+            document.getElementById('search-input').addEventListener('input', (e) => {
+                filterServices(e.target.value);
+            });
+        }
+
+        // Webhooks are disabled; always fetch live data
+
+        function toggleAutoRefresh() {
+            const btn = document.getElementById('auto-refresh-btn');
+            isAutoRefresh = !isAutoRefresh;
+            
+            if (isAutoRefresh) {
+                btn.textContent = 'Auto Refresh: ON';
+                btn.style.background = '#48bb78';
+                autoRefreshInterval = setInterval(checkAllStatuses, 60000); // Refresh every minute
+                showNotification('✅ Auto-refresh enabled (every 60 seconds)', 'success');
+            } else {
+                btn.textContent = 'Auto Refresh: OFF';
+                btn.style.background = '#667eea';
+                clearInterval(autoRefreshInterval);
+                showNotification('Auto-refresh disabled', 'success');
+            }
+        }
+
+        function filterServices(searchTerm) {
+            const cards = document.querySelectorAll('.service-card');
+            const term = searchTerm.toLowerCase();
+            
+            cards.forEach(card => {
+                const name = card.dataset.serviceName || '';
+                const aliases = card.dataset.aliases || '';
+                if (name.includes(term) || aliases.includes(term)) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        function showNotification(message, type = 'success') {
+            const container = document.getElementById('notifications');
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            
+            container.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideIn 0.3s ease reverse';
+                setTimeout(() => {
+                    container.removeChild(notification);
+                }, 300);
+            }, 3000);
+        }
+
+        // Initialize dashboard on load
+        initDashboard();
+    </script>
+</body>
+</html>
+
+
