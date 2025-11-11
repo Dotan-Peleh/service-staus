@@ -437,6 +437,17 @@ function webhookStatusgator(req, res) {
     // Get previous state to detect transitions
     const previous = statusStore[key] || { state: 'unknown' };
     
+    // Extract title from StatusGator's component_status_changes or fallback to title/summary
+    let title = payload.title || payload.summary || 'Incident';
+    if (Array.isArray(payload.component_status_changes) && payload.component_status_changes.length > 0) {
+      const components = payload.component_status_changes
+        .filter(c => c.current_status === 'down' || c.current_status === 'warn' || c.current_status === 'degraded')
+        .map(c => c.name);
+      if (components.length > 0) {
+        title = components.join(', ');
+      }
+    }
+    
     // StatusGator payloads vary; normalize common fields
     const status = (payload.status || payload.current_status || '').toLowerCase();
     let result = { state: 'unknown', source: 'webhook-statusgator' };
@@ -454,7 +465,6 @@ function webhookStatusgator(req, res) {
     } else if (status) {
       const criticalWords = ['down','outage','major','critical'];
       const severity = criticalWords.some(w => status.includes(w)) ? 'critical' : 'minor';
-      const title = payload.title || payload.summary || 'Incident';
       result = { state: 'incident', severity, title, source: 'webhook-statusgator' };
       
       // Send incident notification if this is a new incident or severity changed

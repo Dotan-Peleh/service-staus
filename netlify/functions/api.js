@@ -525,6 +525,18 @@ exports.handler = async (event, context) => {
         if (!key) return json(400, { error: 'Missing key parameter' });
         
         const payload = event.body ? JSON.parse(event.body) : {};
+        
+        // Extract title from StatusGator's component_status_changes or fallback to title/summary
+        let title = payload.title || payload.summary || 'Incident';
+        if (Array.isArray(payload.component_status_changes) && payload.component_status_changes.length > 0) {
+          const components = payload.component_status_changes
+            .filter(c => c.current_status === 'down' || c.current_status === 'warn' || c.current_status === 'degraded')
+            .map(c => c.name);
+          if (components.length > 0) {
+            title = components.join(', ');
+          }
+        }
+        
         const status = (payload.status || payload.current_status || '').toLowerCase();
         
         // Normalize incident data
@@ -536,14 +548,12 @@ exports.handler = async (event, context) => {
           result = { state: 'operational', source: 'webhook-statusgator' };
           shouldNotify = true;
           const serviceName = key.includes('apple') ? 'Apple Developer Services' : 'Service';
-          const title = payload.title || 'Service';
           const ended = new Date().toLocaleString();
           const link = key ? `\nStatus: ${key}` : '';
           notificationMessage = `:white_check_mark: ${serviceName} back to normal — ${title}\nResolved: ${ended}${link}`;
         } else if (status) {
           const criticalWords = ['down','outage','major','critical'];
           const severity = criticalWords.some(w => status.includes(w)) ? 'critical' : 'minor';
-          const title = payload.title || payload.summary || 'Incident';
           result = { state: 'incident', severity, title, source: 'webhook-statusgator' };
           shouldNotify = true;
           const serviceName = key.includes('apple') ? 'Apple Developer Services' : 'Service';
