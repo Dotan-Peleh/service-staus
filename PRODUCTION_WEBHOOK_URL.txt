@@ -1,0 +1,82 @@
+═══════════════════════════════════════════════════════════
+🚀 PRODUCTION WEBHOOK URL FOR STATUSGATOR
+═══════════════════════════════════════════════════════════
+
+Your Netlify Site: https://3rd-party-services.netlify.app/
+
+═══════════════════════════════════════════════════════════
+📋 WEBHOOK URL (COPY THIS):
+═══════════════════════════════════════════════════════════
+
+https://3rd-party-services.netlify.app/.netlify/functions/api/webhooks/statusgator?key=https%3A%2F%2Fdeveloper.apple.com%2Fsystem-status%2F
+
+═══════════════════════════════════════════════════════════
+🔧 UPDATE IN STATUSGATOR:
+═══════════════════════════════════════════════════════════
+
+1. Go to StatusGator dashboard
+2. Settings → Integrations → Webhooks
+3. Edit your existing webhook
+4. Replace the ngrok URL with the URL above
+5. Click "Save"
+6. Click "Test Webhook"
+7. ✅ Should see "Success" and Slack notification!
+
+═══════════════════════════════════════════════════════════
+⚠️ BEFORE TESTING:
+═══════════════════════════════════════════════════════════
+
+1. Go to: https://app.netlify.com/
+2. Click "3rd-party-services" site
+3. Click "Deploys" → "Trigger deploy" → "Clear cache and deploy site"
+4. Wait for deploy to complete (~1-2 minutes)
+5. THEN update StatusGator webhook URL
+6. THEN test webhook
+
+═══════════════════════════════════════════════════════════
+🧪 MANUAL TEST (After Deploy):
+═══════════════════════════════════════════════════════════
+
+curl -X POST 'https://3rd-party-services.netlify.app/.netlify/functions/api/webhooks/statusgator?key=https://developer.apple.com/system-status/' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "type": "StatusChange",
+    "status": "down",
+    "component_status_changes": [
+      {
+        "name": "App Store - In-App Purchases",
+        "current_status": "down"
+      }
+    ]
+  }'
+
+✅ Should send Slack notification: 
+"🔴 Apple Developer Services: App Store - In-App Purchases"
+
+═══════════════════════════════════════════════════════════
+📊 VERIFY:
+═══════════════════════════════════════════════════════════
+
+After webhook test, check if incident was received:
+
+curl -s 'https://3rd-party-services.netlify.app/.netlify/functions/api/state' | jq .
+
+Should show Apple incident stored!
+
+═══════════════════════════════════════════════════════════
+✅ CURRENT STATUS:
+═══════════════════════════════════════════════════════════
+
+✓ Code updated and pushed to GitHub
+✓ Webhook handler parses StatusGator format correctly
+✓ Slack integration ready
+✓ Production site identified: 3rd-party-services.netlify.app
+
+TODO:
+1. Redeploy to Netlify
+2. Update webhook URL in StatusGator
+3. Test webhook
+4. Get Slack notifications! 🎉
+
+═══════════════════════════════════════════════════════════
+
